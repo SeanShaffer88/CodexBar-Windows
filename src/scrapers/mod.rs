@@ -4,7 +4,9 @@
 
 pub mod claude_code;
 pub mod codex;
+pub mod deepseek;
 pub mod http;
+pub mod moonshot;
 pub mod openrouter;
 
 use std::path::{Path, PathBuf};

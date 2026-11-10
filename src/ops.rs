@@ -3,7 +3,7 @@
 
 use crate::config::Config;
 use crate::model::ProviderReport;
-use crate::scrapers::{claude_code, codex, openrouter};
+use crate::scrapers::{claude_code, codex, deepseek, moonshot, openrouter};
 use crate::store;
 use std::path::{Path, PathBuf};
 
@@ -34,6 +34,12 @@ pub fn collect_all(cfg: &Config, data_dir: &Path, now: i64) -> Vec<ProviderRepor
     if cfg.providers.openrouter {
         out.push(openrouter::collect(data_dir, now));
     }
+    if cfg.providers.deepseek {
+        out.push(deepseek::collect(data_dir, now));
+    }
+    if cfg.providers.moonshot {
+        out.push(moonshot::collect(data_dir, now));
+    }
     // Offline fallback: swap in the last cached windows for network failures.
     let cached = store::latest(data_dir);
     for r in out.iter_mut() {
@@ -50,6 +56,34 @@ pub fn collect_all(cfg: &Config, data_dir: &Path, now: i64) -> Vec<ProviderRepor
         }
     }
     out
+}
+
+/// True when the worst window crossed `threshold` upward since the last
+/// check — the tray notifies once per crossing, never repeatedly.
+/// (Consumed by the Windows tray; exercised directly by tests elsewhere.)
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn crossed_threshold(prev: Option<f64>, now: Option<f64>, threshold: f64) -> bool {
+    match (prev, now) {
+        (Some(p), Some(n)) => p < threshold && n >= threshold,
+        (None, Some(n)) => n >= threshold,
+        _ => false,
+    }
+}
+
+/// The busiest window across all healthy reports: (provider, label, percent).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn worst_window(reports: &[ProviderReport]) -> Option<(String, String, f64)> {
+    let mut best: Option<(String, String, f64)> = None;
+    for r in reports.iter().filter(|r| r.ok) {
+        for w in &r.windows {
+            if let Some(p) = w.used_percent {
+                if best.as_ref().map(|(_, _, bp)| p > *bp).unwrap_or(true) {
+                    best = Some((r.name.clone(), w.label.clone(), p));
+                }
+            }
+        }
+    }
+    best
 }
 
 /// Collect and record a history snapshot.
@@ -89,6 +123,15 @@ pub fn render_text(reports: &[ProviderReport], now: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn threshold_crossing_fires_once() {
+        assert!(crossed_threshold(Some(80.0), Some(95.0), 90.0));
+        assert!(!crossed_threshold(Some(95.0), Some(97.0), 90.0));
+        assert!(!crossed_threshold(Some(95.0), Some(80.0), 90.0));
+        assert!(crossed_threshold(None, Some(91.0), 90.0));
+        assert!(!crossed_threshold(None, None, 90.0));
+    }
 
     #[test]
     fn render_shows_windows_and_errors() {

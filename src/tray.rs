@@ -18,7 +18,7 @@ pub fn run() -> i32 {
 mod imp {
     use crate::model::ProviderReport;
     use crate::{config, ops, timeutil};
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use std::sync::Mutex;
     use windows_sys::Win32::Foundation::*;
     use windows_sys::Win32::Graphics::Gdi::*;
@@ -37,6 +37,7 @@ mod imp {
     const ID_QUIT: usize = 1004;
 
     static REPORTS: Mutex<Vec<ProviderReport>> = Mutex::new(Vec::new());
+    static PREV_WORST: Mutex<Option<f64>> = Mutex::new(None);
     static DATA_DIR: Mutex<PathBuf> = Mutex::new(PathBuf::new());
     static REFRESH_MIN: Mutex<u32> = Mutex::new(15);
 
@@ -224,6 +225,22 @@ mod imp {
         }
     }
 
+    unsafe fn show_balloon(hwnd: HWND, title: &str, text: &str) {
+        let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
+        nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+        nid.hWnd = hwnd;
+        nid.uID = 1;
+        nid.uFlags = NIF_INFO;
+        nid.dwInfoFlags = NIIF_WARNING;
+        for (i, ch) in text.encode_utf16().take(255).enumerate() {
+            nid.szInfo[i] = ch;
+        }
+        for (i, ch) in title.encode_utf16().take(63).enumerate() {
+            nid.szInfoTitle[i] = ch;
+        }
+        Shell_NotifyIconW(NIM_MODIFY, &nid);
+    }
+
     unsafe fn remove_icon(hwnd: HWND) {
         let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
         nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
@@ -243,6 +260,22 @@ mod imp {
             }
             WM_READY => {
                 update_icon(hwnd);
+                // Notify once when the busiest window crosses 90%.
+                let worst = {
+                    let reports = REPORTS.lock().unwrap();
+                    crate::ops::worst_window(&reports)
+                };
+                if let Some((name, label, pct)) = worst {
+                    let mut prev = PREV_WORST.lock().unwrap();
+                    if crate::ops::crossed_threshold(*prev, Some(pct), 90.0) {
+                        show_balloon(
+                            hwnd,
+                            "CodexBar-Windows — limit warning",
+                            &format!("{name} {label} is {pct:.0}% used."),
+                        );
+                    }
+                    *prev = Some(pct);
+                }
                 0
             }
             WM_TRAY => {

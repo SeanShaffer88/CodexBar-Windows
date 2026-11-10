@@ -18,6 +18,12 @@ pub struct Providers {
     pub claude_code: bool,
     #[serde(default = "yes")]
     pub openrouter: bool,
+    /// Off until a key is stored: `set-key deepseek` turns it on.
+    #[serde(default)]
+    pub deepseek: bool,
+    /// Off until a key is stored: `set-key moonshot` turns it on.
+    #[serde(default)]
+    pub moonshot: bool,
 }
 
 fn yes() -> bool {
@@ -30,6 +36,8 @@ impl Default for Providers {
             codex: true,
             claude_code: true,
             openrouter: true,
+            deepseek: false,
+            moonshot: false,
         }
     }
 }

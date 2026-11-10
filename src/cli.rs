@@ -13,15 +13,20 @@ Usage:
   codexbar-windows tray            Start the tray app
   codexbar-windows status          Show the last collected numbers
   codexbar-windows status --json   Same, as JSON
+  codexbar-windows status --provider codex
+                                   Only one provider (also on refresh)
   codexbar-windows refresh         Collect fresh numbers and save them
   codexbar-windows refresh --json  Same, as JSON
   codexbar-windows history         List saved snapshots (newest last)
   codexbar-windows clear-history   Move history to history.json.bak
-  codexbar-windows set-key openrouter
-                                   Read an OpenRouter API key from stdin and
-                                   store it encrypted (Windows DPAPI)
-  codexbar-windows clear-key openrouter
-                                   Remove the stored OpenRouter API key
+  codexbar-windows providers       List providers, on/off, and key state
+  codexbar-windows set-key <openrouter|deepseek|moonshot>
+                                   Read an API key from stdin and store it
+                                   encrypted (Windows DPAPI); turns the
+                                   provider on
+  codexbar-windows clear-key <openrouter|deepseek|moonshot>
+                                   Remove the stored API key; turns the
+                                   provider off
   codexbar-windows config          Show the settings file contents
   codexbar-windows config refresh <minutes>
                                    Set the tray refresh interval (5-120)
@@ -41,8 +46,16 @@ pub fn run(args: &[String]) -> i32 {
     let cmd = args.first().map(|s| s.as_str()).unwrap_or("");
     match cmd {
         "" | "tray" => crate::tray::run(),
-        "status" => status(&dir, args.iter().any(|a| a == "--json")),
-        "refresh" => refresh_cmd(&dir, args.iter().any(|a| a == "--json")),
+        "status" => status(
+            &dir,
+            args.iter().any(|a| a == "--json"),
+            provider_filter(args),
+        ),
+        "refresh" => refresh_cmd(
+            &dir,
+            args.iter().any(|a| a == "--json"),
+            provider_filter(args),
+        ),
         "history" => history_cmd(&dir, args.iter().any(|a| a == "--json")),
         "clear-history" => match store::clear(&dir) {
             Ok(()) => {
@@ -51,6 +64,7 @@ pub fn run(args: &[String]) -> i32 {
             }
             Err(e) => fail(&e),
         },
+        "providers" => providers_cmd(&dir),
         "set-key" => set_key(&dir, args),
         "clear-key" => clear_key(&dir, args),
         "config" => config_cmd(&dir, args),
@@ -87,16 +101,38 @@ fn load_cfg(dir: &Path) -> config::Config {
     cfg
 }
 
-fn status(dir: &Path, json: bool) -> i32 {
+/// The `--provider <id>` value, when present.
+fn provider_filter(args: &[String]) -> Option<String> {
+    args.windows(2)
+        .find(|w| w[0] == "--provider")
+        .map(|w| w[1].clone())
+}
+
+fn only(
+    reports: &[crate::model::ProviderReport],
+    filter: &Option<String>,
+) -> Vec<crate::model::ProviderReport> {
+    match filter {
+        Some(id) => reports.iter().filter(|r| &r.id == id).cloned().collect(),
+        None => reports.to_vec(),
+    }
+}
+
+fn status(dir: &Path, json: bool, filter: Option<String>) -> i32 {
     match store::latest(dir) {
         Some(snap) => {
+            let reports = only(&snap.reports, &filter);
+            if reports.is_empty() {
+                println!("No saved reading for that provider yet. Run `refresh`.");
+                return 0;
+            }
             if json {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&snap.reports).unwrap_or_default()
+                    serde_json::to_string_pretty(&reports).unwrap_or_default()
                 );
             } else {
-                print!("{}", ops::render_text(&snap.reports, timeutil::now_unix()));
+                print!("{}", ops::render_text(&reports, timeutil::now_unix()));
                 println!(
                     "(last collected {}; run `refresh` for fresh numbers)",
                     timeutil::format_utc(snap.at)
@@ -106,15 +142,16 @@ fn status(dir: &Path, json: bool) -> i32 {
         }
         None => {
             println!("Nothing collected yet — running a first refresh:");
-            refresh_cmd(dir, json)
+            refresh_cmd(dir, json, filter)
         }
     }
 }
 
-fn refresh_cmd(dir: &Path, json: bool) -> i32 {
+fn refresh_cmd(dir: &Path, json: bool, filter: Option<String>) -> i32 {
     let cfg = load_cfg(dir);
     let now = timeutil::now_unix();
-    let reports = ops::refresh(&cfg, dir, now);
+    let all = ops::refresh(&cfg, dir, now);
+    let reports = only(&all, &filter);
     if json {
         println!(
             "{}",
@@ -153,36 +190,79 @@ fn history_cmd(dir: &Path, json: bool) -> i32 {
     0
 }
 
-fn set_key(dir: &Path, args: &[String]) -> i32 {
-    match args.get(1).map(|s| s.as_str()) {
-        Some("openrouter") => {
-            eprintln!("Paste the OpenRouter API key, then press Enter:");
-            let mut input = String::new();
-            if std::io::stdin().read_line(&mut input).is_err() {
-                let _ = std::io::stdin().read_to_string(&mut input);
+fn set_provider_enabled(dir: &Path, provider: &str, on: bool) {
+    let mut cfg = load_cfg(dir);
+    match provider {
+        "openrouter" => cfg.providers.openrouter = on,
+        "deepseek" => cfg.providers.deepseek = on,
+        "moonshot" => cfg.providers.moonshot = on,
+        _ => return,
+    }
+    let _ = config::save(dir, &cfg);
+}
+
+fn providers_cmd(dir: &Path) -> i32 {
+    let cfg = load_cfg(dir);
+    let key_state = |p: &str| {
+        if secrets::KEY_PROVIDERS.contains(&p) {
+            if secrets::get_key(dir, p).is_some() {
+                "key stored"
+            } else {
+                "no key stored"
             }
-            match secrets::set_openrouter_key(dir, &input) {
-                Ok(()) => {
-                    println!("Key stored, encrypted with Windows DPAPI.");
-                    0
-                }
-                Err(e) => fail(&e),
-            }
+        } else {
+            "local logs"
         }
-        _ => fail("Usage: codexbar-windows set-key openrouter"),
+    };
+    let rows = [
+        ("codex", "Codex", cfg.providers.codex),
+        ("claude-code", "Claude Code", cfg.providers.claude_code),
+        ("openrouter", "OpenRouter", cfg.providers.openrouter),
+        ("deepseek", "DeepSeek", cfg.providers.deepseek),
+        ("moonshot", "Moonshot", cfg.providers.moonshot),
+    ];
+    for (id, name, on) in rows {
+        println!(
+            "{name:<12} {:<3}  {}",
+            if on { "on" } else { "off" },
+            key_state(id)
+        );
+    }
+    0
+}
+
+fn set_key(dir: &Path, args: &[String]) -> i32 {
+    let provider = args.get(1).map(|s| s.as_str()).unwrap_or("");
+    if !secrets::KEY_PROVIDERS.contains(&provider) {
+        return fail("Usage: codexbar-windows set-key <openrouter|deepseek|moonshot>");
+    }
+    eprintln!("Paste the {provider} API key, then press Enter:");
+    let mut input = String::new();
+    if std::io::stdin().read_line(&mut input).is_err() {
+        let _ = std::io::stdin().read_to_string(&mut input);
+    }
+    match secrets::set_key(dir, provider, &input) {
+        Ok(()) => {
+            set_provider_enabled(dir, provider, true);
+            println!("Key stored, encrypted with Windows DPAPI. The {provider} provider is on.");
+            0
+        }
+        Err(e) => fail(&e),
     }
 }
 
 fn clear_key(dir: &Path, args: &[String]) -> i32 {
-    match args.get(1).map(|s| s.as_str()) {
-        Some("openrouter") => match secrets::clear_openrouter_key(dir) {
-            Ok(()) => {
-                println!("Stored OpenRouter key removed.");
-                0
-            }
-            Err(e) => fail(&e),
-        },
-        _ => fail("Usage: codexbar-windows clear-key openrouter"),
+    let provider = args.get(1).map(|s| s.as_str()).unwrap_or("");
+    if !secrets::KEY_PROVIDERS.contains(&provider) {
+        return fail("Usage: codexbar-windows clear-key <openrouter|deepseek|moonshot>");
+    }
+    match secrets::clear_key(dir, provider) {
+        Ok(()) => {
+            set_provider_enabled(dir, provider, false);
+            println!("Stored {provider} key removed. The provider is off.");
+            0
+        }
+        Err(e) => fail(&e),
     }
 }
 

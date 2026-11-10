@@ -7,6 +7,9 @@
   - Codex (local CLI logs): session (5h) + weekly windows, plan, totals.
   - Claude Code (local transcripts): today / 7-day / 30-day token totals.
   - OpenRouter (API): credit usage, limit, and remaining balance.
+  - DeepSeek (API): balances per currency (total / granted / topped up).
+- One tray warning balloon when a usage window crosses 90%.
+- `providers` command: every provider's on/off and key state at a glance.
 - Automatic refresh every 5–120 minutes (default 15), manual Refresh in
   the menu and by command.
 - Offline fallback to the last known numbers, labeled as such.

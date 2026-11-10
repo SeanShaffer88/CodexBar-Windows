@@ -12,6 +12,61 @@ struct SecretsFile {
     schema_version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     openrouter: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    deepseek: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    moonshot: Option<String>,
+}
+
+/// Providers that take an API key stored here.
+pub const KEY_PROVIDERS: [&str; 3] = ["openrouter", "deepseek", "moonshot"];
+
+fn slot<'a>(f: &'a SecretsFile, provider: &str) -> Option<&'a String> {
+    match provider {
+        "openrouter" => f.openrouter.as_ref(),
+        "deepseek" => f.deepseek.as_ref(),
+        "moonshot" => f.moonshot.as_ref(),
+        _ => None,
+    }
+}
+
+fn set_slot(f: &mut SecretsFile, provider: &str, value: Option<String>) -> Result<(), String> {
+    match provider {
+        "openrouter" => f.openrouter = value,
+        "deepseek" => f.deepseek = value,
+        "moonshot" => f.moonshot = value,
+        _ => return Err(format!("unknown key provider: {provider}")),
+    }
+    Ok(())
+}
+
+/// Store an API key for `provider`, DPAPI-encrypted.
+pub fn set_key(dir: &Path, provider: &str, key: &str) -> Result<(), String> {
+    let key = key.trim();
+    if key.is_empty() {
+        return Err("the key is empty".to_string());
+    }
+    let blob = protect(key.as_bytes())?;
+    let mut f = load_file(dir);
+    f.schema_version = 1;
+    set_slot(&mut f, provider, Some(base64_encode(&blob)))?;
+    save_file(dir, &f)
+}
+
+/// Read the API key for `provider`, or None when none is stored.
+pub fn get_key(dir: &Path, provider: &str) -> Option<String> {
+    let enc = slot(&load_file(dir), provider)?.clone();
+    let blob = base64_decode(&enc)?;
+    let plain = unprotect(&blob).ok()?;
+    String::from_utf8(plain).ok().map(|s| s.trim().to_string())
+}
+
+/// Remove the stored API key for `provider`.
+pub fn clear_key(dir: &Path, provider: &str) -> Result<(), String> {
+    let mut f = load_file(dir);
+    f.schema_version = 1;
+    set_slot(&mut f, provider, None)?;
+    save_file(dir, &f)
 }
 
 fn secrets_path(dir: &Path) -> PathBuf {
@@ -33,33 +88,9 @@ fn save_file(dir: &Path, f: &SecretsFile) -> Result<(), String> {
     std::fs::rename(&tmp, secrets_path(dir)).map_err(|e| format!("cannot replace secrets: {e}"))
 }
 
-/// Store the OpenRouter API key, DPAPI-encrypted.
-pub fn set_openrouter_key(dir: &Path, key: &str) -> Result<(), String> {
-    let key = key.trim();
-    if key.is_empty() {
-        return Err("the key is empty".to_string());
-    }
-    let blob = protect(key.as_bytes())?;
-    let mut f = load_file(dir);
-    f.schema_version = 1;
-    f.openrouter = Some(base64_encode(&blob));
-    save_file(dir, &f)
-}
-
 /// Read the OpenRouter API key, or None when none is stored.
 pub fn get_openrouter_key(dir: &Path) -> Option<String> {
-    let enc = load_file(dir).openrouter?;
-    let blob = base64_decode(&enc)?;
-    let plain = unprotect(&blob).ok()?;
-    String::from_utf8(plain).ok().map(|s| s.trim().to_string())
-}
-
-/// Remove the stored OpenRouter API key.
-pub fn clear_openrouter_key(dir: &Path) -> Result<(), String> {
-    let mut f = load_file(dir);
-    f.schema_version = 1;
-    f.openrouter = None;
-    save_file(dir, &f)
+    get_key(dir, "openrouter")
 }
 
 #[cfg(windows)]
@@ -201,7 +232,7 @@ mod tests {
     #[test]
     fn empty_key_refused() {
         let dir = std::env::temp_dir().join("cbw-sec-nonexistent");
-        assert!(set_openrouter_key(&dir, "  ").is_err());
+        assert!(set_key(&dir, "openrouter", "  ").is_err());
     }
 
     #[cfg(windows)]
@@ -209,14 +240,14 @@ mod tests {
     fn dpapi_round_trip() {
         let dir = std::env::temp_dir().join(format!("cbw-sec-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        set_openrouter_key(&dir, "sk-or-test-123").unwrap();
+        set_key(&dir, "openrouter", "sk-or-test-123").unwrap();
         let raw = std::fs::read_to_string(secrets_path(&dir)).unwrap();
         assert!(
             !raw.contains("sk-or-test-123"),
             "key must never be stored in plain text"
         );
         assert_eq!(get_openrouter_key(&dir).as_deref(), Some("sk-or-test-123"));
-        clear_openrouter_key(&dir).unwrap();
+        clear_key(&dir, "openrouter").unwrap();
         assert_eq!(get_openrouter_key(&dir), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
