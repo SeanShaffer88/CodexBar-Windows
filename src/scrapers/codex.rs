@@ -37,9 +37,9 @@ pub struct CodexState {
 
 /// Fold one session file's lines into `state`; later events overwrite
 /// earlier ones. `seen` dedupes by raw line across resumed/forked sessions.
-pub fn parse_lines(lines: &[String], state: &mut CodexState, seen: &mut HashSet<String>, now: i64) {
+pub fn parse_lines(text: &str, state: &mut CodexState, seen: &mut HashSet<u64>, now: i64) {
     let month_start = now - 30 * 86_400;
-    for line in lines {
+    for line in text.lines() {
         if line.contains("\"turn_context\"") {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
                 let payload = v.get("payload").unwrap_or(&v);
@@ -52,7 +52,7 @@ pub fn parse_lines(lines: &[String], state: &mut CodexState, seen: &mut HashSet<
         if !line.contains("\"token_count\"") {
             continue;
         }
-        if !seen.insert(line.clone()) {
+        if !seen.insert(super::str_hash(line)) {
             continue;
         }
         let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
@@ -108,17 +108,38 @@ pub fn parse_lines(lines: &[String], state: &mut CodexState, seen: &mut HashSet<
 /// The one session-log scan. `collect` and `model_breakdown` both
 /// read from this single pass — the detail window used to pay for
 /// the scan twice per open before the two were merged.
-fn scan(dir: &Path, now: i64) -> Option<CodexState> {
+///
+/// With a `cutoff`, files last modified before it are skipped, and
+/// the second return value says whether any were. The per-model
+/// month rows lose nothing (their entries are timestamp-gated to
+/// the last 30 days, and an entry's file is modified when the entry
+/// is appended). The all-time fields — total tokens, plan, the
+/// latest rate-limit windows — come from the newest event overall,
+/// which a gated pass can only miss when NO recent file carries
+/// usage; the caller checks for that case and rescans ungated.
+fn scan_cutoff(dir: &Path, now: i64, cutoff: Option<i64>) -> Option<(CodexState, bool)> {
     let sessions = dir.join("sessions");
     if !sessions.is_dir() {
         return None;
     }
     let mut state = CodexState::default();
     let mut seen = HashSet::new();
+    let mut skipped = false;
     for f in super::jsonl_files(&sessions) {
-        parse_lines(&super::read_lines(&f), &mut state, &mut seen, now);
+        if let Some(c) = cutoff {
+            if f.modified_secs() < c {
+                skipped = true;
+                continue;
+            }
+        }
+        let text = super::load_text(&f.path);
+        parse_lines(&text, &mut state, &mut seen, now);
     }
-    Some(state)
+    Some((state, skipped))
+}
+
+fn scan(dir: &Path, now: i64) -> Option<CodexState> {
+    scan_cutoff(dir, now, None).map(|(state, _)| state)
 }
 
 fn sorted_rows(state: CodexState) -> Vec<(String, MonthUse)> {
@@ -222,13 +243,24 @@ fn report_from(state: &CodexState, now: i64) -> ProviderReport {
 
 /// One scan producing both the report and the per-model breakdown
 /// rows, for callers that need the two together (the detail window).
+/// The refresh path, so it takes the modification-time gate — with
+/// the dormant-log fallback: when the gated pass skipped files and
+/// found no usage at all, the all-time totals may be hiding in an
+/// old file, so the scan runs again ungated.
 pub fn collect_with_breakdown(
     dir: &Path,
     now: i64,
 ) -> (ProviderReport, Option<Vec<(String, MonthUse)>>) {
-    match scan(dir, now) {
+    match scan_cutoff(dir, now, Some(now - 31 * 86_400)) {
         None => (no_sessions(dir, now), None),
-        Some(state) => {
+        Some((state, skipped)) => {
+            let dormant =
+                skipped && state.session_used_percent.is_none() && state.total_tokens.is_none();
+            let state = if dormant {
+                scan(dir, now).unwrap_or(state)
+            } else {
+                state
+            };
             let report = report_from(&state, now);
             (report, Some(sorted_rows(state)))
         }
@@ -250,7 +282,7 @@ mod tests {
         let mut st = CodexState::default();
         let mut seen = HashSet::new();
         parse_lines(
-            &[line(10.0, 100, 500), line(42.0, 200, 900)],
+            &[line(10.0, 100, 500), line(42.0, 200, 900)].join("\n"),
             &mut st,
             &mut seen,
             0,
@@ -267,10 +299,7 @@ mod tests {
         let mut st = CodexState::default();
         let mut seen = HashSet::new();
         parse_lines(
-            &[
-                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\"}}".into(),
-                "{broken token_count".into(),
-            ],
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\"}}\n{broken token_count",
             &mut st,
             &mut seen,
             0,
@@ -284,5 +313,23 @@ mod tests {
         assert!(!r.ok);
         assert!(r.error.unwrap().contains("no Codex sessions"));
         assert!(rows.is_none());
+    }
+
+    #[test]
+    fn gate_falls_back_for_dormant_logs() {
+        let dir = std::env::temp_dir().join(format!("cbw-codex-gate-{}", std::process::id()));
+        let sessions = dir.join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(sessions.join("s.jsonl"), line(42.0, 200, 900)).unwrap();
+        // A "now" far in the future: the only file looks untouched
+        // for over 31 days, so the gated pass skips it — and must
+        // fall back to the full scan rather than report no usage.
+        let (r, _rows) = collect_with_breakdown(&dir, 4_000_000_000);
+        assert!(r.ok);
+        assert!(r
+            .windows
+            .iter()
+            .any(|w| w.label == "Total tokens" && w.used == Some(900.0)));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

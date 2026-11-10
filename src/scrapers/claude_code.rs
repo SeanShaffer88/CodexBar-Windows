@@ -56,17 +56,17 @@ fn usage_total(v: &serde_json::Value) -> i64 {
 /// "Today" starts at local midnight (`utc_offset_secs` east of UTC);
 /// the 7/30-day windows are rolling.
 pub fn parse_lines(
-    lines: &[String],
+    text: &str,
     now: i64,
     utc_offset_secs: i64,
     totals: &mut TokenTotals,
-    seen: &mut HashSet<String>,
+    seen: &mut HashSet<u64>,
     per_model: &mut HashMap<String, ModelUse>,
 ) {
     let today_start = timeutil::local_day_start(now, utc_offset_secs);
     let week_start = now - 7 * 86_400;
     let month_start = now - 30 * 86_400;
-    for line in lines {
+    for line in text.lines() {
         if !line.contains("\"usage\"") {
             continue;
         }
@@ -83,7 +83,7 @@ pub fn parse_lines(
             continue;
         };
         if let Some(id) = msg.get("id").and_then(|i| i.as_str()) {
-            if !seen.insert(id.to_string()) {
+            if !seen.insert(super::str_hash(id)) {
                 continue;
             }
         }
@@ -149,7 +149,18 @@ pub fn estimate(per_model: &HashMap<String, ModelUse>) -> (f64, f64, bool) {
 /// month aggregates. `collect` and `model_breakdown` both read from
 /// this single pass — the detail window used to pay for the scan
 /// twice per open before the two were merged.
-fn scan(dir: &Path, now: i64) -> Option<(TokenTotals, HashMap<String, ModelUse>)> {
+///
+/// With a `cutoff`, files last modified before it are skipped. That
+/// loses nothing here: every number this scan produces covers at
+/// most the last 30 days, an entry's file is modified when the
+/// entry is appended (so in-window entries live in files modified
+/// inside the window), and a duplicated message counts once from
+/// whichever copy is read.
+fn scan_cutoff(
+    dir: &Path,
+    now: i64,
+    cutoff: Option<i64>,
+) -> Option<(TokenTotals, HashMap<String, ModelUse>)> {
     let projects = dir.join("projects");
     if !projects.is_dir() {
         return None;
@@ -159,16 +170,19 @@ fn scan(dir: &Path, now: i64) -> Option<(TokenTotals, HashMap<String, ModelUse>)
     let mut per_model: HashMap<String, ModelUse> = HashMap::new();
     let offset = timeutil::local_utc_offset_seconds();
     for f in super::jsonl_files(&projects) {
-        parse_lines(
-            &super::read_lines(&f),
-            now,
-            offset,
-            &mut totals,
-            &mut seen,
-            &mut per_model,
-        );
+        if let Some(c) = cutoff {
+            if f.modified_secs() < c {
+                continue;
+            }
+        }
+        let text = super::load_text(&f.path);
+        parse_lines(&text, now, offset, &mut totals, &mut seen, &mut per_model);
     }
     Some((totals, per_model))
+}
+
+fn scan(dir: &Path, now: i64) -> Option<(TokenTotals, HashMap<String, ModelUse>)> {
+    scan_cutoff(dir, now, None)
 }
 
 fn sorted_rows(per_model: HashMap<String, ModelUse>) -> Vec<(String, ModelUse)> {
@@ -239,11 +253,13 @@ fn no_projects(dir: &Path, now: i64) -> ProviderReport {
 
 /// One scan producing both the report and the per-model breakdown
 /// rows, for callers that need the two together (the detail window).
+/// The refresh path, so it takes the modification-time gate:
+/// files untouched for 31+ days cannot hold in-window entries.
 pub fn collect_with_breakdown(
     dir: &Path,
     now: i64,
 ) -> (ProviderReport, Option<Vec<(String, ModelUse)>>) {
-    match scan(dir, now) {
+    match scan_cutoff(dir, now, Some(now - 31 * 86_400)) {
         None => (no_projects(dir, now), None),
         Some((totals, per_model)) => {
             let report = report_from(&totals, &per_model, now);
@@ -271,13 +287,13 @@ mod tests {
             timeutil::format_utc(timeutil::day_start(NOW) + 3600).replace(' ', "T") + ":00Z";
         let mut totals = TokenTotals::default();
         let mut seen = HashSet::new();
-        let lines = vec![
+        let lines = [
             msg("a", &today, 100, 50),
             msg("a", &today, 100, 50), // duplicate copy of the same message
             msg("b", "2020-01-01T00:00:00Z", 999, 999), // far outside every window
         ];
         let mut pm = HashMap::new();
-        parse_lines(&lines, NOW, 0, &mut totals, &mut seen, &mut pm);
+        parse_lines(&lines.join("\n"), NOW, 0, &mut totals, &mut seen, &mut pm);
         assert_eq!(totals.today, 150);
         assert_eq!(totals.week, 150);
         assert_eq!(totals.month, 150);
@@ -297,5 +313,22 @@ mod tests {
         let (r, rows) = collect_with_breakdown(Path::new("/nonexistent-claude-dir"), NOW);
         assert!(!r.ok);
         assert!(rows.is_none());
+    }
+
+    #[test]
+    fn gate_skips_files_older_than_the_cutoff() {
+        let dir = std::env::temp_dir().join(format!("cbw-claude-gate-{}", std::process::id()));
+        let projects = dir.join("projects");
+        std::fs::create_dir_all(&projects).unwrap();
+        let today =
+            timeutil::format_utc(timeutil::day_start(NOW) + 3600).replace(' ', "T") + ":00Z";
+        std::fs::write(projects.join("p.jsonl"), msg("a", &today, 100, 50)).unwrap();
+        let (totals, _) = scan_cutoff(&dir, NOW, None).unwrap();
+        assert_eq!(totals.today, 150);
+        // A cutoff past every real file's modification time gates
+        // the file out entirely.
+        let (totals, _) = scan_cutoff(&dir, NOW, Some(i64::MAX)).unwrap();
+        assert_eq!(totals.today, 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
