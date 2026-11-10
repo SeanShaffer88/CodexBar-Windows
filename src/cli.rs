@@ -18,13 +18,17 @@ Usage:
   codexbar-windows refresh         Collect fresh numbers and save them
   codexbar-windows refresh --json  Same, as JSON
   codexbar-windows history         List saved snapshots (newest last)
+  codexbar-windows report          Day-by-day summary from history
+  codexbar-windows report --days 30 --json
+                                   Same, more days, as JSON
   codexbar-windows clear-history   Move history to history.json.bak
   codexbar-windows providers       List providers, on/off, and key state
-  codexbar-windows set-key <openrouter|deepseek|moonshot>
+  codexbar-windows set-key <openrouter|deepseek|moonshot|openai|anthropic>
                                    Read an API key from stdin and store it
                                    encrypted (Windows DPAPI); turns the
-                                   provider on
-  codexbar-windows clear-key <openrouter|deepseek|moonshot>
+                                   provider on. openai and anthropic need
+                                   Admin keys (org usage endpoints)
+  codexbar-windows clear-key <openrouter|deepseek|moonshot|openai|anthropic>
                                    Remove the stored API key; turns the
                                    provider off
   codexbar-windows settings        Open the settings window (Windows);
@@ -64,6 +68,7 @@ pub fn run(args: &[String]) -> i32 {
             provider_filter(args),
         ),
         "history" => history_cmd(&dir, args.iter().any(|a| a == "--json")),
+        "report" => report_cmd(&dir, args),
         "clear-history" => match store::clear(&dir) {
             Ok(()) => {
                 println!("History moved to history.json.bak (rename it back to undo).");
@@ -204,6 +209,8 @@ fn set_provider_enabled(dir: &Path, provider: &str, on: bool) {
         "openrouter" => cfg.providers.openrouter = on,
         "deepseek" => cfg.providers.deepseek = on,
         "moonshot" => cfg.providers.moonshot = on,
+        "openai" => cfg.providers.openai = on,
+        "anthropic" => cfg.providers.anthropic = on,
         _ => return,
     }
     let _ = config::save(dir, &cfg);
@@ -228,6 +235,8 @@ fn providers_cmd(dir: &Path) -> i32 {
         ("openrouter", "OpenRouter", cfg.providers.openrouter),
         ("deepseek", "DeepSeek", cfg.providers.deepseek),
         ("moonshot", "Moonshot", cfg.providers.moonshot),
+        ("openai", "OpenAI API", cfg.providers.openai),
+        ("anthropic", "Anthropic API", cfg.providers.anthropic),
     ];
     for (id, name, on) in rows {
         println!(
@@ -242,7 +251,10 @@ fn providers_cmd(dir: &Path) -> i32 {
 fn set_key(dir: &Path, args: &[String]) -> i32 {
     let provider = args.get(1).map(|s| s.as_str()).unwrap_or("");
     if !secrets::KEY_PROVIDERS.contains(&provider) {
-        return fail("Usage: codexbar-windows set-key <openrouter|deepseek|moonshot>");
+        return fail(&format!(
+            "Usage: codexbar-windows set-key <{}>",
+            secrets::KEY_PROVIDERS.join("|")
+        ));
     }
     eprintln!("Paste the {provider} API key, then press Enter:");
     let mut input = String::new();
@@ -262,7 +274,10 @@ fn set_key(dir: &Path, args: &[String]) -> i32 {
 fn clear_key(dir: &Path, args: &[String]) -> i32 {
     let provider = args.get(1).map(|s| s.as_str()).unwrap_or("");
     if !secrets::KEY_PROVIDERS.contains(&provider) {
-        return fail("Usage: codexbar-windows clear-key <openrouter|deepseek|moonshot>");
+        return fail(&format!(
+            "Usage: codexbar-windows clear-key <{}>",
+            secrets::KEY_PROVIDERS.join("|")
+        ));
     }
     match secrets::clear_key(dir, provider) {
         Ok(()) => {
@@ -272,6 +287,70 @@ fn clear_key(dir: &Path, args: &[String]) -> i32 {
         }
         Err(e) => fail(&e),
     }
+}
+
+/// Day-by-day summary built from the saved history: for each of the last
+/// `--days` days (default 7), the day's last snapshot, one line per
+/// provider. Days are local days.
+fn report_cmd(dir: &Path, args: &[String]) -> i32 {
+    let json = args.iter().any(|a| a == "--json");
+    let days: i64 = argval(args, "--days")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(7)
+        .clamp(1, 90);
+    let snaps = store::all(dir);
+    if snaps.is_empty() {
+        println!("No history yet. Run `refresh` to start collecting.");
+        return 0;
+    }
+    let offset = timeutil::local_utc_offset_seconds();
+    let cutoff = timeutil::local_day_start(timeutil::now_unix(), offset) - (days - 1) * 86_400;
+    let mut by_day: std::collections::BTreeMap<i64, &store::Snapshot> =
+        std::collections::BTreeMap::new();
+    for s in &snaps {
+        let d = timeutil::local_day_start(s.at, offset);
+        if d >= cutoff {
+            by_day.insert(d, s);
+        }
+    }
+    if by_day.is_empty() {
+        println!("No snapshots in the last {days} day(s).");
+        return 0;
+    }
+    if json {
+        let arr: Vec<serde_json::Value> = by_day
+            .iter()
+            .map(|(day, snap)| {
+                serde_json::json!({
+                    "date": &timeutil::format_utc(day + offset)[..10],
+                    "at": snap.at,
+                    "providers": snap.reports.iter().map(|r| {
+                        serde_json::json!({
+                            "id": r.id, "name": r.name, "ok": r.ok, "error": r.error,
+                            "windows": r.windows.iter().map(|w| serde_json::json!({
+                                "label": w.label, "used_percent": w.used_percent,
+                                "used": w.used, "unit": w.unit, "detail": w.detail
+                            })).collect::<Vec<_>>()
+                        })
+                    }).collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&arr).unwrap_or_default());
+        return 0;
+    }
+    for (day, snap) in &by_day {
+        println!("{}", &timeutil::format_utc(day + offset)[..10]);
+        for r in &snap.reports {
+            if !r.ok {
+                println!("  {} - {}", r.name, r.error.as_deref().unwrap_or("no data"));
+                continue;
+            }
+            let parts: Vec<String> = r.windows.iter().map(|w| w.describe(snap.at)).collect();
+            println!("  {} - {}", r.name, parts.join("; "));
+        }
+    }
+    0
 }
 
 fn argval(args: &[String], flag: &str) -> Option<String> {
@@ -344,6 +423,8 @@ fn show_settings(dir: &Path, json: bool) -> i32 {
                 "openrouter": { "on": cfg.providers.openrouter, "key_stored": key("openrouter") },
                 "deepseek": { "on": cfg.providers.deepseek, "key_stored": key("deepseek") },
                 "moonshot": { "on": cfg.providers.moonshot, "key_stored": key("moonshot") },
+                "openai": { "on": cfg.providers.openai, "key_stored": key("openai") },
+                "anthropic": { "on": cfg.providers.anthropic, "key_stored": key("anthropic") },
             }
         });
         println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());

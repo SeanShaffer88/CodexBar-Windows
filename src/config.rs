@@ -26,6 +26,12 @@ pub struct Providers {
     /// Off until a key is stored: `set-key moonshot` turns it on.
     #[serde(default)]
     pub moonshot: bool,
+    /// Off until an Admin key is stored: `set-key openai` turns it on.
+    #[serde(default)]
+    pub openai: bool,
+    /// Off until an Admin key is stored: `set-key anthropic` turns it on.
+    #[serde(default)]
+    pub anthropic: bool,
 }
 
 fn yes() -> bool {
@@ -40,6 +46,8 @@ impl Default for Providers {
             openrouter: true,
             deepseek: false,
             moonshot: false,
+            openai: false,
+            anthropic: false,
         }
     }
 }

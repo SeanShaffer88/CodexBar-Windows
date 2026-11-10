@@ -62,14 +62,16 @@ mod imp {
     const ID_HDR_PROVIDERS: usize = 900;
     const ID_HDR_GENERAL: usize = 901;
 
-    const PROVIDERS: [(&str, &str); 5] = [
+    const PROVIDERS: [(&str, &str); 7] = [
         ("codex", "Codex"),
         ("claude-code", "Claude Code"),
         ("openrouter", "OpenRouter"),
         ("deepseek", "DeepSeek"),
         ("moonshot", "Moonshot"),
+        ("openai", "OpenAI API"),
+        ("anthropic", "Anthropic API"),
     ];
-    const KEY_IDS: [&str; 3] = ["openrouter", "deepseek", "moonshot"];
+    const KEY_IDS: [&str; 5] = ["openrouter", "deepseek", "moonshot", "openai", "anthropic"];
 
     static OPEN: AtomicBool = AtomicBool::new(false);
     static DONE: AtomicBool = AtomicBool::new(false);
@@ -180,8 +182,8 @@ mod imp {
     struct State {
         dir: PathBuf,
         tray: Option<HWND>,
-        checks: [HWND; 5],
-        key_status: [HWND; 3],
+        checks: [HWND; 7],
+        key_status: [HWND; 5],
         refresh_edit: HWND,
         warn_edit: HWND,
         autostart: HWND,
@@ -234,7 +236,7 @@ mod imp {
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
                 676,
-                599,
+                640,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
                 hinst,
@@ -329,7 +331,9 @@ mod imp {
             1 => cfg.providers.claude_code,
             2 => cfg.providers.openrouter,
             3 => cfg.providers.deepseek,
-            _ => cfg.providers.moonshot,
+            4 => cfg.providers.moonshot,
+            5 => cfg.providers.openai,
+            _ => cfg.providers.anthropic,
         }
     }
 
@@ -364,8 +368,8 @@ mod imp {
                 let mut st = Box::new(State {
                     dir: init.dir.clone(),
                     tray: init.tray,
-                    checks: [std::ptr::null_mut(); 5],
-                    key_status: [std::ptr::null_mut(); 3],
+                    checks: [std::ptr::null_mut(); 7],
+                    key_status: [std::ptr::null_mut(); 5],
                     refresh_edit: std::ptr::null_mut(),
                     warn_edit: std::ptr::null_mut(),
                     autostart: std::ptr::null_mut(),
@@ -380,7 +384,7 @@ mod imp {
                     14,
                     14,
                     632,
-                    276,
+                    352,
                     0,
                     false,
                     s,
@@ -399,7 +403,7 @@ mod imp {
                     s,
                 );
                 for (i, (_, pname)) in PROVIDERS.iter().enumerate() {
-                    let y = 44 + (i as i32) * 46;
+                    let y = 42 + (i as i32) * 44;
                     st.checks[i] = ctl(
                         hwnd,
                         "BUTTON",
@@ -430,8 +434,8 @@ mod imp {
                         );
                     }
                 }
-                for i in 0..3 {
-                    let y = 44 + ((i + 2) as i32) * 46;
+                for i in 0..5 {
+                    let y = 42 + ((i + 2) as i32) * 44;
                     st.key_status[i] = ctl(
                         hwnd,
                         "STATIC",
@@ -465,7 +469,7 @@ mod imp {
                     "Keys are encrypted with Windows DPAPI and never shown after saving.",
                     0,
                     28,
-                    262,
+                    336,
                     590,
                     16,
                     902,
@@ -479,7 +483,7 @@ mod imp {
                     "",
                     BS_GROUPBOX as u32,
                     14,
-                    304,
+                    380,
                     632,
                     150,
                     0,
@@ -492,7 +496,7 @@ mod imp {
                     "GENERAL",
                     0,
                     28,
-                    295,
+                    371,
                     130,
                     18,
                     ID_HDR_GENERAL,
@@ -505,7 +509,7 @@ mod imp {
                     "Refresh every",
                     0,
                     28,
-                    330,
+                    406,
                     110,
                     20,
                     0,
@@ -518,36 +522,36 @@ mod imp {
                     &cfg.refresh_minutes.to_string(),
                     WS_BORDER | (ES_NUMBER as u32) | WS_TABSTOP,
                     142,
-                    327,
+                    403,
                     56,
                     24,
                     ID_REFRESH_EDIT,
                     false,
                     s,
                 );
-                ctl(hwnd, "STATIC", "minutes", 0, 204, 330, 60, 20, 0, false, s);
-                ctl(hwnd, "STATIC", "Warn at", 0, 300, 330, 60, 20, 0, false, s);
+                ctl(hwnd, "STATIC", "minutes", 0, 204, 406, 60, 20, 0, false, s);
+                ctl(hwnd, "STATIC", "Warn at", 0, 300, 406, 60, 20, 0, false, s);
                 st.warn_edit = ctl(
                     hwnd,
                     "EDIT",
                     &cfg.warn_threshold_percent.to_string(),
                     WS_BORDER | (ES_NUMBER as u32) | WS_TABSTOP,
                     362,
-                    327,
+                    403,
                     56,
                     24,
                     ID_WARN_EDIT,
                     false,
                     s,
                 );
-                ctl(hwnd, "STATIC", "% used", 0, 424, 330, 60, 20, 0, false, s);
+                ctl(hwnd, "STATIC", "% used", 0, 424, 406, 60, 20, 0, false, s);
                 st.autostart = ctl(
                     hwnd,
                     "BUTTON",
                     "Start with Windows",
                     (BS_AUTOCHECKBOX as u32) | WS_TABSTOP,
                     28,
-                    368,
+                    444,
                     220,
                     22,
                     ID_AUTOSTART,
@@ -561,7 +565,7 @@ mod imp {
                     "Data folder:",
                     0,
                     300,
-                    370,
+                    446,
                     80,
                     20,
                     0,
@@ -574,7 +578,7 @@ mod imp {
                     &st.dir.to_string_lossy(),
                     SS_ENDELLIPSIS,
                     384,
-                    370,
+                    446,
                     232,
                     20,
                     0,
@@ -587,7 +591,7 @@ mod imp {
                     "Open data",
                     (BS_OWNERDRAW as u32) | WS_TABSTOP,
                     28,
-                    406,
+                    482,
                     100,
                     28,
                     ID_OPEN_DATA,
@@ -600,7 +604,7 @@ mod imp {
                     "Clear history",
                     (BS_OWNERDRAW as u32) | WS_TABSTOP,
                     138,
-                    406,
+                    482,
                     110,
                     28,
                     ID_CLEAR_HISTORY,
@@ -613,7 +617,7 @@ mod imp {
                     "",
                     0,
                     260,
-                    410,
+                    486,
                     356,
                     20,
                     ID_FEEDBACK,
@@ -627,7 +631,7 @@ mod imp {
                     "Save",
                     (BS_OWNERDRAW as u32) | (BS_DEFPUSHBUTTON as u32) | WS_TABSTOP,
                     432,
-                    478,
+                    546,
                     100,
                     32,
                     ID_SAVE,
@@ -640,7 +644,7 @@ mod imp {
                     "Cancel",
                     (BS_OWNERDRAW as u32) | WS_TABSTOP,
                     542,
-                    478,
+                    546,
                     100,
                     32,
                     ID_CANCEL,
@@ -655,7 +659,7 @@ mod imp {
                 let id = GetDlgCtrlID(lp as HWND);
                 let color = if id == ID_HDR_PROVIDERS as i32 || id == ID_HDR_GENERAL as i32 {
                     RED_TEXT
-                } else if (200..=204).contains(&id) || id == 902 {
+                } else if (200..=206).contains(&id) || id == 902 {
                     DIM
                 } else {
                     INK
@@ -711,7 +715,7 @@ mod imp {
                             Err(e) => set_text(fb, &e),
                         }
                     }
-                    _ if (ID_KEYBTN0..ID_KEYBTN0 + 3).contains(&id) => {
+                    _ if (ID_KEYBTN0..ID_KEYBTN0 + 5).contains(&id) => {
                         let idx = id - ID_KEYBTN0;
                         let dir = state(hwnd).dir.clone();
                         key_dialog(hwnd, &dir, KEY_IDS[idx]);
@@ -766,6 +770,8 @@ mod imp {
         cfg.providers.openrouter = checked(st.checks[2]);
         cfg.providers.deepseek = checked(st.checks[3]);
         cfg.providers.moonshot = checked(st.checks[4]);
+        cfg.providers.openai = checked(st.checks[5]);
+        cfg.providers.anthropic = checked(st.checks[6]);
         cfg.refresh_minutes = refresh;
         cfg.warn_threshold_percent = warn;
         let want_auto = checked(st.autostart);
@@ -1086,6 +1092,8 @@ mod imp {
             "openrouter" => cfg.providers.openrouter = on,
             "deepseek" => cfg.providers.deepseek = on,
             "moonshot" => cfg.providers.moonshot = on,
+            "openai" => cfg.providers.openai = on,
+            "anthropic" => cfg.providers.anthropic = on,
             _ => return,
         }
         let _ = config::save(dir, &cfg);

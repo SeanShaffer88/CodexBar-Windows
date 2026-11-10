@@ -80,6 +80,25 @@ pub fn format_utc(secs: i64) -> String {
     )
 }
 
+/// Start of the UTC calendar month containing `secs`.
+pub fn month_start_utc(secs: i64) -> i64 {
+    let (y, m, _) = civil_from_days(secs.div_euclid(86_400));
+    days_from_civil(y, m, 1) * 86_400
+}
+
+/// Format Unix seconds as RFC 3339 UTC, e.g. `2026-11-01T00:00:00Z`.
+pub fn rfc3339(secs: i64) -> String {
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400);
+    let (y, m, d) = civil_from_days(days);
+    format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
+        rem / 3_600,
+        (rem % 3_600) / 60,
+        rem % 60
+    )
+}
+
 /// Start of the UTC day containing `secs`.
 pub fn day_start(secs: i64) -> i64 {
     secs.div_euclid(86_400) * 86_400
@@ -128,6 +147,17 @@ pub fn now_unix() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn month_start_and_rfc3339() {
+        let nov9 = parse_iso8601("2026-11-09T23:07:07Z").unwrap();
+        assert_eq!(rfc3339(nov9), "2026-11-09T23:07:07Z");
+        assert_eq!(rfc3339(month_start_utc(nov9)), "2026-11-01T00:00:00Z");
+        let feb = parse_iso8601("2027-02-28T12:00:00Z").unwrap();
+        assert_eq!(rfc3339(month_start_utc(feb)), "2027-02-01T00:00:00Z");
+        // Round trip through the existing civil conversion.
+        assert_eq!(days_from_civil(2026, 11, 1) * 86_400, month_start_utc(nov9));
+    }
 
     #[test]
     fn parses_zulu() {

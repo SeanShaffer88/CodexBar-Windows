@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.5.0 — Unreleased
+
+### Added
+- OpenAI API provider: whole-organization token usage (today and the
+  last 7 days) and month-to-date cost, from OpenAI's documented
+  Administration usage and costs endpoints. Needs an Admin API key
+  (`set-key openai`); this is API-platform usage, not ChatGPT
+  subscription quota, which has no public API.
+- Anthropic API provider: whole-organization token usage (today and
+  the last 7 days) and month-to-date cost, from Anthropic's documented
+  Usage & Cost endpoints. Needs an Admin API key (`set-key anthropic`)
+  and a Team-plan-or-higher organization.
+- Cost estimates for the local-log providers: Codex and Claude Code
+  usage is now also priced per model at public list prices and shown
+  as a clearly labeled estimate (list prices are not a subscription
+  bill; models with no known price produce no estimate).
+- `report` command: a day-by-day summary from the saved history (the
+  last snapshot of each local day), with `--days N` and `--json`.
+
+### Changed
+- The settings window now lists seven providers.
+
 ## v0.4.0 — unreleased
 
 - **Settings window**: a dark, single-page configuration window (design B)

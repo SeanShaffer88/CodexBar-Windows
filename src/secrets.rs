@@ -19,7 +19,7 @@ struct SecretsFile {
 }
 
 /// Providers that take an API key stored here.
-pub const KEY_PROVIDERS: [&str; 3] = ["openrouter", "deepseek", "moonshot"];
+pub const KEY_PROVIDERS: [&str; 5] = ["openrouter", "deepseek", "moonshot", "openai", "anthropic"];
 
 fn slot<'a>(f: &'a SecretsFile, provider: &str) -> Option<&'a String> {
     match provider {

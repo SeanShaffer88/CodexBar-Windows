@@ -6,6 +6,19 @@
 /// Errors are plain-language and never include the token.
 #[cfg(windows)]
 pub fn get_json(url: &str, bearer: Option<&str>) -> Result<String, String> {
+    match bearer {
+        Some(tok) => {
+            let auth = format!("Bearer {tok}");
+            get_json_headers(url, &[("Authorization", &auth)])
+        }
+        None => get_json_headers(url, &[]),
+    }
+}
+
+/// GET `url` with extra request headers (name, value). Same contract as
+/// `get_json`.
+#[cfg(windows)]
+pub fn get_json_headers(url: &str, extra_headers: &[(&str, &str)]) -> Result<String, String> {
     use windows_sys::Win32::Foundation::ERROR_SUCCESS;
     use windows_sys::Win32::Networking::WinHttp::*;
 
@@ -89,8 +102,8 @@ pub fn get_json(url: &str, bearer: Option<&str>) -> Result<String, String> {
             return Err("could not build the request".to_string());
         }
         let mut headers = String::from("Accept: application/json\r\n");
-        if let Some(tok) = bearer {
-            headers.push_str(&format!("Authorization: Bearer {tok}\r\n"));
+        for (name, value) in extra_headers {
+            headers.push_str(&format!("{name}: {value}\r\n"));
         }
         let sent = WinHttpSendRequest(
             request.0 as _,
@@ -143,6 +156,12 @@ pub fn get_json(url: &str, bearer: Option<&str>) -> Result<String, String> {
 }
 
 #[cfg(not(windows))]
-pub fn get_json(_url: &str, _bearer: Option<&str>) -> Result<String, String> {
+pub fn get_json(url: &str, bearer: Option<&str>) -> Result<String, String> {
+    let _ = bearer;
+    get_json_headers(url, &[])
+}
+
+#[cfg(not(windows))]
+pub fn get_json_headers(_url: &str, _headers: &[(&str, &str)]) -> Result<String, String> {
     Err("network checks are only available in the Windows build".to_string())
 }
