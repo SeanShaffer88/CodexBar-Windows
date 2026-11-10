@@ -17,10 +17,12 @@ use std::path::{Path, PathBuf};
 /// One `.jsonl` log file and when it was last modified. The
 /// modification time matters: a file can only gain entries by being
 /// appended to, which moves it — so scans can skip files untouched
-/// since before their window and lose nothing.
+/// since before their window and lose nothing. The size rides
+/// along as the scan cache's other stamp: an append moves both.
 pub struct LogFile {
     pub path: PathBuf,
     pub modified: std::time::SystemTime,
+    pub size: u64,
 }
 
 impl LogFile {
@@ -47,11 +49,20 @@ pub fn jsonl_files(dir: &Path) -> Vec<LogFile> {
             if p.is_dir() {
                 stack.push(p);
             } else if p.extension().map(|e| e == "jsonl").unwrap_or(false) {
-                let modified = entry
+                let (modified, size) = entry
                     .metadata()
-                    .and_then(|m| m.modified())
-                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                out.push(LogFile { path: p, modified });
+                    .map(|m| {
+                        (
+                            m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+                            m.len(),
+                        )
+                    })
+                    .unwrap_or((std::time::SystemTime::UNIX_EPOCH, 0));
+                out.push(LogFile {
+                    path: p,
+                    modified,
+                    size,
+                });
             }
         }
     }
