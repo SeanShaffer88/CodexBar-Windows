@@ -465,14 +465,18 @@ mod imp {
 
     /// The instant open path: everything the last snapshot already
     /// knows — cards, chart, and the breakdown lines stored with it.
-    /// Store reads only; no provider collection, no log scans.
+    /// Store reads only; no provider collection, no log scans. One
+    /// history read serves both the cards and the chart — the file
+    /// used to be parsed twice per open.
     fn load_snapshot(dir: &std::path::Path) -> Option<SnapshotData> {
-        let snap = store::latest(dir)?;
+        let snaps = store::all(dir);
+        let snap = snaps.last()?;
         let now = timeutil::now_unix();
+        let offset = timeutil::local_utc_offset_seconds();
         Some(SnapshotData {
             cards: cards_for(&snap.reports, now),
             fetched: snap.at,
-            chart: load_chart(dir, now),
+            chart: daily_tokens(&snaps, now, 14, offset),
             breakdown: snap.breakdown.clone(),
         })
     }
