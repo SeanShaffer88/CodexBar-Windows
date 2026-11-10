@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.8.0 — Unreleased
+
+### Added
+- Tokens-per-day chart in the usage detail window: the last 14 days
+  from the saved history (the providers with a daily count — Claude
+  Code and the two organization APIs), with the peak day marked and
+  today shown in red. Days with no readings stay empty, and the chart
+  appears only once some day has a real count.
+- The README now shows screenshots from a real run.
+
+### Changed
+- Starting the program while it is already running in the tray now
+  opens the usage detail window on the running copy, instead of
+  showing an "already running" message.
+
 ## v0.7.0 — Unreleased
 
 ### Added

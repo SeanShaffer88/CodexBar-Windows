@@ -20,7 +20,7 @@ implemented and verified here.
 | Browser-cookie / OAuth session reuse | — | Not planned for v0.x; local files and API keys only |
 | Per-provider tray icons / merge mode | Single icon showing the worst window | Partial |
 | Settings window | Dark single-page window (tray menu, tray double-click, or `settings` command): provider switches, key management, refresh interval, warning threshold, start-with-Windows | Implemented (v0.4.0) |
-| Usage detail popover/window | Dark card window (tray "Details…" or `details` command): one card per provider with headline number, bar, and footnote; own Refresh; opens automatically at program launch (v0.7.0) | Implemented (v0.6.0) |
+| Usage detail popover/window | Dark card window (tray "Details…" or `details` command): one card per provider with headline number, bar, and footnote; own Refresh; opens automatically at program launch (v0.7.0); 14-day tokens-per-day chart from history (v0.8.0) | Implemented (v0.6.0) |
 | Per-model breakdown | `breakdown` command with per-model tokens and list-price estimates | Implemented (v0.6.0) |
 
 ## Known limitations
