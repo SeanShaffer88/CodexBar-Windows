@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.9.2 — Unreleased
+## v0.9.2 — 2026-11-10
 
 ### Fixed
 - The usage detail window opens instantly. It used to collect
