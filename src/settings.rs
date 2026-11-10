@@ -210,6 +210,7 @@ mod imp {
                 ("CodexBarWinSettings", Some(wnd_proc)),
                 ("CodexBarWinKeyDlg", Some(key_proc)),
             ];
+            let icon = crate::icon::app_icon();
             for (name, proc) in classes {
                 let class_name = wide(name);
                 let wc = WNDCLASSEXW {
@@ -217,6 +218,8 @@ mod imp {
                     style: CS_HREDRAW | CS_VREDRAW,
                     lpfnWndProc: proc,
                     hInstance: hinst,
+                    hIcon: icon,
+                    hIconSm: icon,
                     hbrBackground: theme().2,
                     lpszClassName: class_name.as_ptr(),
                     ..std::mem::zeroed()
