@@ -44,11 +44,12 @@ SmartScreen may ask you to confirm the first run.
 
 ## Use
 
-Double-click `codexbar-windows.exe` and it settles into the tray. The icon
-shows a usage bar for your busiest window (green, amber at 70%, red at
-90%); hover for a summary, click for the full breakdown, Refresh, and
-Quit. It refreshes every 15 minutes (changeable) and keeps a bounded
-history of past readings in `data/history.json`.
+Double-click `codexbar-windows.exe` and it settles into the tray and
+opens the usage detail window. The tray icon shows a usage bar for your
+busiest window (green, amber at 70%, red at 90%); hover for a summary,
+click for the full breakdown, Refresh, and Quit. It refreshes every 15
+minutes (changeable) and keeps a bounded history of past readings in
+`data/history.json`.
 
 Everything the tray does is also a command:
 

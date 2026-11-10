@@ -25,10 +25,13 @@
   text.
 - Usage detail window: one card per provider with its headline number
   (percent, month cost, tokens, or credits), from the tray menu or the
-  `details` command, with its own Refresh.
+  `details` command, with its own Refresh. It also opens on its own
+  when the program starts.
 - `breakdown` command: per-model token totals and cost estimates for
   the local-log providers.
 - Per-Monitor v2 DPI awareness for crisp rendering on scaled displays.
+- Its own application icon on the executable, the windows, and the
+  installer.
 - Full command-line parity for every tray capability, including `--json`.
 - Single instance, no console window in tray mode, no registry writes,
   no telemetry, no external runtime.

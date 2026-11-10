@@ -38,7 +38,7 @@ fn others(windows: &[crate::model::UsageWindow], skip: usize, now: i64) -> Strin
         .filter(|(i, _)| *i != skip)
         .map(|(_, w)| w.describe(now))
         .collect();
-    short(&parts.join(" · "), 118)
+    short(&parts.join(" · "), 100)
 }
 
 /// Build the card for one provider report. Headline choice, in order:
@@ -91,8 +91,8 @@ pub fn card_for(r: &ProviderReport, now: i64) -> Card {
         Some(u) => fmt_num(u),
         None => "\u{2014}".to_string(),
     };
-    let sub = if w.unit == "tokens" {
-        format!("{} {}", w.label.to_lowercase(), "tokens")
+    let sub = if w.unit == "tokens" && !w.label.to_lowercase().ends_with("tokens") {
+        format!("{} tokens", w.label.to_lowercase())
     } else {
         w.label.to_lowercase()
     };
@@ -181,6 +181,19 @@ mod tests {
         assert_eq!(c.big, "$18.42");
         assert_eq!(c.sub, "cost this month");
         assert!(c.foot.contains("Today"));
+    }
+
+    #[test]
+    fn token_label_is_not_doubled() {
+        let r = report(vec![UsageWindow {
+            label: "Total tokens".into(),
+            used: Some(89_100_000.0),
+            unit: "tokens".into(),
+            ..Default::default()
+        }]);
+        let c = card_for(&r, 0);
+        assert_eq!(c.big, "89.1M");
+        assert_eq!(c.sub, "total tokens");
     }
 
     #[test]
@@ -286,7 +299,7 @@ mod imp {
     }
 
     fn win_height(n: usize) -> i32 {
-        60 + rows(n) * 136 + 52
+        60 + rows(n) * 160 + 52
     }
 
     pub fn open(tray: Option<HWND>) -> i32 {
@@ -303,11 +316,14 @@ mod imp {
             let hinst = GetModuleHandleW(std::ptr::null());
             let class_name = wide("CodexBarWinDetail");
             let bg = CreateSolidBrush(BG);
+            let icon = crate::icon::app_icon();
             let wc = WNDCLASSEXW {
                 cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
                 style: CS_HREDRAW | CS_VREDRAW,
                 lpfnWndProc: Some(wnd_proc),
                 hInstance: hinst,
+                hIcon: icon,
+                hIconSm: icon,
                 hbrBackground: bg,
                 lpszClassName: class_name.as_ptr(),
                 ..std::mem::zeroed()
@@ -382,6 +398,28 @@ mod imp {
         SelectObject(dc, old);
     }
 
+    /// Draw text wrapped to up to the rect's height in lines, clipped
+    /// at the rect — card lines wrap instead of running off the card.
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn text_wrap(dc: HDC, x: i32, y: i32, w: i32, h: i32, f: HFONT, color: u32, s: &str) {
+        let old = SelectObject(dc, f);
+        SetTextColor(dc, color);
+        let mut rc = RECT {
+            left: x,
+            top: y,
+            right: x + w,
+            bottom: y + h,
+        };
+        DrawTextW(
+            dc,
+            wide(s).as_ptr(),
+            -1,
+            &mut rc,
+            DT_WORDBREAK | DT_NOPREFIX,
+        );
+        SelectObject(dc, old);
+    }
+
     unsafe fn paint(hwnd: HWND, st: &State) {
         let mut ps: PAINTSTRUCT = std::mem::zeroed();
         let dc = BeginPaint(hwnd, &mut ps);
@@ -411,25 +449,25 @@ mod imp {
             let col = (i % 2) as i32;
             let row = (i / 2) as i32;
             let x = 14 + col * 332;
-            let y = 60 + row * 136;
+            let y = 60 + row * 160;
             let brush = CreateSolidBrush(CARD);
             let pen = CreatePen(PS_SOLID, 1, EDGE);
             let ob = SelectObject(dc, brush);
             let op = SelectObject(dc, pen);
-            RoundRect(dc, x, y, x + 320, y + 124, 14, 14);
+            RoundRect(dc, x, y, x + 320, y + 148, 14, 14);
             SelectObject(dc, ob);
             SelectObject(dc, op);
             DeleteObject(brush);
             DeleteObject(pen);
             text_out(dc, x + 16, y + 12, st.f_label, RED_TEXT, &c.label);
-            text_out(dc, x + 16, y + 32, st.f_big, INK, &c.big);
-            text_out(dc, x + 16, y + 74, st.f_norm, DIM, &c.sub);
+            text_out(dc, x + 16, y + 30, st.f_big, INK, &c.big);
+            text_wrap(dc, x + 16, y + 70, 288, 40, st.f_norm, DIM, &c.sub);
             if let Some(p) = c.bar {
                 let track = CreateSolidBrush(TRACK);
                 let ob2 = SelectObject(dc, track);
                 let pen2 = CreatePen(PS_SOLID, 1, TRACK);
                 let op2 = SelectObject(dc, pen2);
-                RoundRect(dc, x + 16, y + 100, x + 304, y + 108, 8, 8);
+                RoundRect(dc, x + 16, y + 122, x + 304, y + 130, 8, 8);
                 SelectObject(dc, ob2);
                 SelectObject(dc, op2);
                 DeleteObject(track);
@@ -446,17 +484,17 @@ mod imp {
                 let ob3 = SelectObject(dc, fillb);
                 let pen3 = CreatePen(PS_SOLID, 1, color);
                 let op3 = SelectObject(dc, pen3);
-                RoundRect(dc, x + 16, y + 100, x + 16 + wfill, y + 108, 8, 8);
+                RoundRect(dc, x + 16, y + 122, x + 16 + wfill, y + 130, 8, 8);
                 SelectObject(dc, ob3);
                 SelectObject(dc, op3);
                 DeleteObject(fillb);
                 DeleteObject(pen3);
             } else if !c.foot.is_empty() {
-                text_out(dc, x + 16, y + 98, st.f_small, DIM, &c.foot);
+                text_wrap(dc, x + 16, y + 114, 288, 32, st.f_small, DIM, &c.foot);
             }
         }
         // Footer note.
-        let fy = 60 + rows(st.cards.len()) * 136 + 4;
+        let fy = 60 + rows(st.cards.len()) * 160 + 4;
         text_out(
             dc,
             18,

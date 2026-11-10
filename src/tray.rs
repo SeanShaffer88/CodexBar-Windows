@@ -31,6 +31,7 @@ pub(crate) mod imp {
     const WM_TRAY: u32 = WM_APP + 2;
     const WM_READY: u32 = WM_APP + 1;
     pub(crate) const WM_SETTINGS_SAVED: u32 = WM_APP + 7;
+    const WM_OPEN_DETAILS: u32 = WM_APP + 8;
     const TIMER_ID: usize = 1;
     const ID_SETTINGS: usize = 1005;
     const ID_DETAILS: usize = 1006;
@@ -100,6 +101,9 @@ pub(crate) mod imp {
             add_icon(hwnd, None);
             SetTimer(hwnd, TIMER_ID, 30_000, None); // first refresh in 30 s
             spawn_refresh(hwnd);
+            // The usage detail window opens at launch (owner's call,
+            // 2026-11-10); posted so the tray loop is running first.
+            PostMessageW(hwnd, WM_OPEN_DETAILS, 0, 0);
 
             let mut msg: MSG = std::mem::zeroed();
             while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
@@ -292,6 +296,10 @@ pub(crate) mod imp {
                 KillTimer(hwnd, TIMER_ID);
                 SetTimer(hwnd, TIMER_ID, cfg.refresh_minutes * 60_000, None);
                 spawn_refresh(hwnd);
+                0
+            }
+            WM_OPEN_DETAILS => {
+                crate::detail::open(Some(hwnd));
                 0
             }
             WM_TRAY => {

@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.7.0 — Unreleased
+
+### Added
+- Application icon: the program now has its own icon (three usage
+  meters, the fullest in red) on the executable, on the settings and
+  detail windows, and in the installer.
+- The usage detail window opens automatically when the program
+  starts, alongside the tray icon.
+
+### Fixed
+- Detail-window cards: the Codex card no longer repeats the word
+  "tokens" ("total tokens tokens"), and card text now wraps inside
+  the taller cards instead of running off the edge and being cut off.
+
 ## v0.6.0 — 2026-11-10
 
 ### Added

@@ -12,6 +12,8 @@ OutFile "..\CodexBar-Windows-v${VERSION}-x64-Setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\CodexBar-Windows"
 RequestExecutionLevel user
 Unicode true
+Icon "..\assets\app.ico"
+UninstallIcon "..\assets\app.ico"
 
 Page Directory
 Page InstFiles
@@ -27,6 +29,7 @@ Section "Install"
   CreateShortcut "$SMPROGRAMS\CodexBar-Windows\CodexBar-Windows.lnk" "$INSTDIR\codexbar-windows.exe"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CodexBar-Windows" "DisplayName" "CodexBar-Windows"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CodexBar-Windows" "DisplayIcon" "$INSTDIR\codexbar-windows.exe"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CodexBar-Windows" "DisplayVersion" "${VERSION}"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\CodexBar-Windows" "UninstallString" "$INSTDIR\Uninstall.exe"
 SectionEnd

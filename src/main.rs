@@ -8,6 +8,8 @@
 mod cli;
 mod config;
 mod detail;
+#[cfg(windows)]
+mod icon;
 mod model;
 mod ops;
 mod pricing;
