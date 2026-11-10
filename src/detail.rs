@@ -111,6 +111,79 @@ pub fn cards_for(reports: &[ProviderReport], now: i64) -> Vec<Card> {
     reports.iter().map(|r| card_for(r, now)).collect()
 }
 
+/// One day in the tokens-per-day chart.
+#[cfg_attr(not(windows), allow(dead_code))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct DayTokens {
+    /// Short day label, e.g. "Nov 3".
+    pub label: String,
+    pub tokens: f64,
+    pub today: bool,
+}
+
+const MONTHS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/// Tokens per local day for the last `days` days, oldest first. For
+/// each day, the day's last snapshot contributes the sum of its
+/// "Today" token windows — the providers that keep a daily count
+/// (Claude Code and the two organization APIs). Days with no snapshot
+/// count as zero, so gaps in the history stay visible as gaps.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn daily_tokens(
+    snaps: &[crate::store::Snapshot],
+    now: i64,
+    days: i64,
+    offset: i64,
+) -> Vec<DayTokens> {
+    let today = crate::timeutil::local_day_start(now, offset);
+    let first = today - (days - 1) * 86_400;
+    let mut by_day: std::collections::BTreeMap<i64, &crate::store::Snapshot> =
+        std::collections::BTreeMap::new();
+    for s in snaps {
+        let d = crate::timeutil::local_day_start(s.at, offset);
+        if d >= first && d <= today {
+            by_day.insert(d, s);
+        }
+    }
+    (0..days)
+        .map(|i| {
+            let d = first + i * 86_400;
+            let tokens = by_day
+                .get(&d)
+                .map(|s| {
+                    s.reports
+                        .iter()
+                        .flat_map(|r| &r.windows)
+                        .filter(|w| w.label == "Today" && w.unit == "tokens")
+                        .map(|w| w.used.unwrap_or(0.0))
+                        .sum()
+                })
+                .unwrap_or(0.0);
+            let date = crate::timeutil::format_utc(d + offset);
+            let month = date
+                .get(5..7)
+                .and_then(|m| m.parse::<usize>().ok())
+                .filter(|m| (1..=12).contains(m))
+                .map(|m| MONTHS[m - 1])
+                .unwrap_or("");
+            let day = date.get(8..10).unwrap_or("").trim_start_matches('0');
+            DayTokens {
+                label: format!("{month} {day}"),
+                tokens,
+                today: d == today,
+            }
+        })
+        .collect()
+}
+
+/// The chart is worth showing only when some day has a real count.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn chart_visible(days: &[DayTokens]) -> bool {
+    days.iter().any(|d| d.tokens > 0.0)
+}
+
 #[cfg(not(windows))]
 #[allow(dead_code)]
 pub fn open(_tray: Option<*mut std::ffi::c_void>) -> i32 {
@@ -183,6 +256,46 @@ mod tests {
         assert!(c.foot.contains("Today"));
     }
 
+    fn snap(at: i64, today_tokens: f64) -> crate::store::Snapshot {
+        crate::store::Snapshot {
+            at,
+            reports: vec![ProviderReport {
+                id: "claude".into(),
+                name: "Claude Code".into(),
+                ok: true,
+                offline: false,
+                error: None,
+                windows: vec![UsageWindow {
+                    label: "Today".into(),
+                    used: Some(today_tokens),
+                    unit: "tokens".into(),
+                    ..Default::default()
+                }],
+                fetched_at: at,
+            }],
+        }
+    }
+
+    #[test]
+    fn daily_tokens_uses_the_last_snapshot_of_each_day() {
+        // Offset 0: local days are UTC days. d0 is a UTC midnight.
+        let d0 = 1_700_006_400;
+        let snaps = vec![
+            snap(d0 + 3_600, 100.0),
+            snap(d0 + 7_200, 250.0),
+            snap(d0 + 86_400 + 60, 40.0),
+        ];
+        let days = daily_tokens(&snaps, d0 + 86_400 + 3_600, 3, 0);
+        assert_eq!(days.len(), 3);
+        assert_eq!(days[0].tokens, 0.0);
+        assert_eq!(days[1].tokens, 250.0);
+        assert_eq!(days[2].tokens, 40.0);
+        assert!(days[2].today);
+        assert!(!days[1].today);
+        assert!(chart_visible(&days));
+        assert!(!chart_visible(&daily_tokens(&[], d0, 3, 0)));
+    }
+
     #[test]
     fn token_label_is_not_doubled() {
         let r = report(vec![UsageWindow {
@@ -209,7 +322,8 @@ mod tests {
 
 #[cfg(windows)]
 mod imp {
-    use super::{cards_for, Card};
+    use super::{cards_for, chart_visible, daily_tokens, Card, DayTokens};
+    use crate::model::fmt_num;
     use crate::{config, ops, store, timeutil};
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -271,6 +385,8 @@ mod imp {
         dir: PathBuf,
         tray: Option<HWND>,
         cards: Vec<Card>,
+        chart: Vec<DayTokens>,
+        chart_shown: bool,
         fetched: i64,
         f_label: HFONT,
         f_big: HFONT,
@@ -283,23 +399,39 @@ mod imp {
         tray: Option<HWND>,
     }
 
-    fn load_cards(dir: &std::path::Path) -> (Vec<Card>, i64) {
+    fn load_chart(dir: &std::path::Path, now: i64) -> Vec<DayTokens> {
+        let offset = timeutil::local_utc_offset_seconds();
+        daily_tokens(&store::all(dir), now, 14, offset)
+    }
+
+    fn load_cards(dir: &std::path::Path) -> (Vec<Card>, i64, Vec<DayTokens>) {
         if let Some(snap) = store::latest(dir) {
             let now = timeutil::now_unix();
-            return (cards_for(&snap.reports, now), snap.at);
+            return (cards_for(&snap.reports, now), snap.at, load_chart(dir, now));
         }
         let (cfg, _) = config::load(dir);
         let now = timeutil::now_unix();
         let reports = ops::refresh(&cfg, dir, now);
-        (cards_for(&reports, now), now)
+        (cards_for(&reports, now), now, load_chart(dir, now))
     }
 
     fn rows(n: usize) -> i32 {
         n.div_ceil(2) as i32
     }
 
-    fn win_height(n: usize) -> i32 {
-        60 + rows(n) * 160 + 52
+    /// Extra window height for the chart section, when it is shown.
+    const CHART_H: i32 = 116;
+
+    fn chart_extra(chart: &[DayTokens]) -> i32 {
+        if chart_visible(chart) {
+            CHART_H
+        } else {
+            0
+        }
+    }
+
+    fn win_height(n: usize, chart: &[DayTokens]) -> i32 {
+        60 + rows(n) * 160 + chart_extra(chart) + 52
     }
 
     pub fn open(tray: Option<HWND>) -> i32 {
@@ -312,7 +444,7 @@ mod imp {
                 return 0;
             }
             let dir = config::data_dir_env();
-            let (cards, _) = load_cards(&dir);
+            let (cards, _, chart) = load_cards(&dir);
             let hinst = GetModuleHandleW(std::ptr::null());
             let class_name = wide("CodexBarWinDetail");
             let bg = CreateSolidBrush(BG);
@@ -338,7 +470,7 @@ mod imp {
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
                 680,
-                win_height(cards.len()),
+                win_height(cards.len(), &chart),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
                 hinst,
@@ -395,6 +527,26 @@ mod imp {
         SetTextColor(dc, color);
         let w = wide(s);
         TextOutW(dc, x, y, w.as_ptr(), (w.len() - 1) as i32);
+        SelectObject(dc, old);
+    }
+
+    /// Draw a single line of text centered in a slot (chart day labels).
+    unsafe fn text_center(dc: HDC, x: i32, y: i32, w: i32, f: HFONT, color: u32, s: &str) {
+        let old = SelectObject(dc, f);
+        SetTextColor(dc, color);
+        let mut rc = RECT {
+            left: x,
+            top: y,
+            right: x + w,
+            bottom: y + 16,
+        };
+        DrawTextW(
+            dc,
+            wide(s).as_ptr(),
+            -1,
+            &mut rc,
+            DT_CENTER | DT_SINGLELINE | DT_NOPREFIX,
+        );
         SelectObject(dc, old);
     }
 
@@ -493,8 +645,53 @@ mod imp {
                 text_wrap(dc, x + 16, y + 114, 288, 32, st.f_small, DIM, &c.foot);
             }
         }
+        // Tokens-per-day chart, when any day has a real count.
+        if chart_visible(&st.chart) {
+            let top = 60 + rows(st.cards.len()) * 160 + 8;
+            text_out(dc, 18, top, st.f_norm, INK, "Tokens per day");
+            let peak = st.chart.iter().map(|d| d.tokens).fold(0.0f64, f64::max);
+            let right = format!("peak {} · last 14 days", fmt_num(peak));
+            let mut sz: SIZE = std::mem::zeroed();
+            let old = SelectObject(dc, st.f_small);
+            GetTextExtentPoint32W(dc, wide(&right).as_ptr(), right.len() as i32, &mut sz);
+            SelectObject(dc, old);
+            text_out(dc, rc.right - sz.cx - 18, top + 2, st.f_small, DIM, &right);
+            let base = top + 92;
+            let lb = CreateSolidBrush(EDGE);
+            let brc = RECT {
+                left: 18,
+                top: base,
+                right: 664,
+                bottom: base + 1,
+            };
+            FillRect(dc, &brc, lb);
+            DeleteObject(lb);
+            for (i, d) in st.chart.iter().enumerate() {
+                let slot = 18 + (i as i32) * 46;
+                if d.tokens > 0.0 && peak > 0.0 {
+                    let h = ((d.tokens / peak) * 58.0) as i32;
+                    let color = if d.today {
+                        RED_TEXT
+                    } else {
+                        rgb(122, 133, 148)
+                    };
+                    let b = CreateSolidBrush(color);
+                    let r = RECT {
+                        left: slot + 9,
+                        top: base - h.max(2),
+                        right: slot + 37,
+                        bottom: base,
+                    };
+                    FillRect(dc, &r, b);
+                    DeleteObject(b);
+                }
+                if i % 2 == 0 || d.today {
+                    text_center(dc, slot, base + 6, 46, st.f_small, DIM, &d.label);
+                }
+            }
+        }
         // Footer note.
-        let fy = 60 + rows(st.cards.len()) * 160 + 4;
+        let fy = 60 + rows(st.cards.len()) * 160 + chart_extra(&st.chart) + 4;
         text_out(
             dc,
             18,
@@ -545,11 +742,13 @@ mod imp {
             WM_CREATE => {
                 let cs = &*(lp as *const CREATESTRUCTW);
                 let init = Box::from_raw(cs.lpCreateParams as *mut Init);
-                let (cards, fetched) = load_cards(&init.dir);
+                let (cards, fetched, chart) = load_cards(&init.dir);
                 let st = Box::new(State {
                     dir: init.dir.clone(),
                     tray: init.tray,
                     cards,
+                    chart_shown: chart_visible(&chart),
+                    chart,
                     fetched,
                     f_label: font(-13, 700),
                     f_big: font(-34, 700),
@@ -563,7 +762,7 @@ mod imp {
                     "Refresh",
                     (BS_OWNERDRAW as u32) | WS_TABSTOP,
                     432,
-                    win_height(n) - 44,
+                    win_height(n, &st.chart) - 44,
                     100,
                     30,
                     ID_REFRESH,
@@ -574,7 +773,7 @@ mod imp {
                     "Close",
                     (BS_OWNERDRAW as u32) | WS_TABSTOP,
                     542,
-                    win_height(n) - 44,
+                    win_height(n, &st.chart) - 44,
                     100,
                     30,
                     ID_CLOSE,
@@ -599,7 +798,38 @@ mod imp {
                     let now = timeutil::now_unix();
                     let reports = ops::refresh(&cfg, &st.dir, now);
                     st.cards = cards_for(&reports, now);
+                    st.chart = load_chart(&st.dir, now);
                     st.fetched = now;
+                    // The window was sized for the chart state at
+                    // creation; resize if a refresh changed it.
+                    let shown = chart_visible(&st.chart);
+                    if shown != st.chart_shown {
+                        st.chart_shown = shown;
+                        let h = win_height(st.cards.len(), &st.chart);
+                        SetWindowPos(
+                            hwnd,
+                            std::ptr::null_mut(),
+                            0,
+                            0,
+                            680,
+                            h,
+                            SWP_NOMOVE | SWP_NOZORDER,
+                        );
+                        for (id, x) in [(ID_REFRESH, 432), (ID_CLOSE, 542)] {
+                            let b = GetDlgItem(hwnd, id as i32);
+                            if !b.is_null() {
+                                SetWindowPos(
+                                    b,
+                                    std::ptr::null_mut(),
+                                    x,
+                                    h - 44,
+                                    100,
+                                    30,
+                                    SWP_NOZORDER,
+                                );
+                            }
+                        }
+                    }
                     if let Some(t) = st.tray {
                         PostMessageW(t, crate::tray::imp::WM_SETTINGS_SAVED, 0, 0);
                     }
