@@ -79,6 +79,17 @@ pub fn load_text(path: &Path) -> String {
     std::fs::read_to_string(path).unwrap_or_default()
 }
 
+/// Read a file's bytes from offset `from` on, decoded the same
+/// all-or-nothing way as `load_text`. The scan cache's tail read:
+/// a grown log file only has its appended bytes parsed.
+pub fn load_range(path: &Path, from: u64) -> String {
+    let Ok(bytes) = std::fs::read(path) else {
+        return String::new();
+    };
+    let start = (from as usize).min(bytes.len());
+    String::from_utf8(bytes[start..].to_vec()).unwrap_or_default()
+}
+
 /// A stable hash of a string for dedupe sets: membership is all
 /// that matters, so the sets store `u64`s instead of allocating a
 /// `String` per entry in the scan hot loop.
