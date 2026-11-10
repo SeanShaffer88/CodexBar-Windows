@@ -85,6 +85,38 @@ pub fn day_start(secs: i64) -> i64 {
     secs.div_euclid(86_400) * 86_400
 }
 
+/// Unix time of local midnight at the start of the day containing `secs`,
+/// given the local offset from UTC in seconds (east positive).
+pub fn local_day_start(secs: i64, offset_secs: i64) -> i64 {
+    day_start(secs + offset_secs) - offset_secs
+}
+
+/// The machine's current offset from UTC in seconds (east positive).
+/// Windows: from the system time-zone information, including whether
+/// daylight saving is in effect right now. Other platforms: 0 (the
+/// production target is Windows; tests pass explicit offsets).
+#[cfg(windows)]
+pub fn local_utc_offset_seconds() -> i64 {
+    use windows_sys::Win32::System::Time::*;
+    unsafe {
+        let mut tzi: TIME_ZONE_INFORMATION = std::mem::zeroed();
+        let mode = GetTimeZoneInformation(&mut tzi);
+        // TIME_ZONE_ID_DAYLIGHT == 2.
+        let extra = if mode == 2 {
+            tzi.DaylightBias
+        } else {
+            tzi.StandardBias
+        };
+        // UTC = local + (Bias + extra) minutes  ⇒  local − UTC = −(Bias + extra).
+        -((tzi.Bias + extra) as i64) * 60
+    }
+}
+
+#[cfg(not(windows))]
+pub fn local_utc_offset_seconds() -> i64 {
+    0
+}
+
 /// Current Unix time in seconds.
 pub fn now_unix() -> i64 {
     std::time::SystemTime::now()
@@ -114,6 +146,21 @@ mod tests {
         assert_eq!(parse_iso8601(""), None);
         assert_eq!(parse_iso8601("2026-13-01T00:00:00Z"), None);
         assert_eq!(parse_iso8601("not a date at all...."), None);
+    }
+
+    #[test]
+    fn local_day_start_shifts_by_offset() {
+        // 2026-11-09T20:15Z is 14:15 at UTC-6; local midnight was 06:00Z.
+        let t = parse_iso8601("2026-11-09T20:15:00Z").unwrap();
+        assert_eq!(
+            local_day_start(t, -6 * 3600),
+            parse_iso8601("2026-11-09T06:00:00Z").unwrap()
+        );
+        // At UTC+9 the same instant is already Nov 10; local midnight was Nov 9 15:00Z.
+        assert_eq!(
+            local_day_start(t, 9 * 3600),
+            parse_iso8601("2026-11-09T15:00:00Z").unwrap()
+        );
     }
 
     #[test]
