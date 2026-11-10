@@ -24,3 +24,7 @@ jobs:
         run: cargo test
       - name: Build (release, linked binary)
         run: cargo build --release
+      - name: Verify embedded icon (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/verify-icon.ps1 target/release/codexbar-windows.exe
