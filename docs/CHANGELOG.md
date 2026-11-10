@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.9.3 — Unreleased
+## v0.9.3 — 2026-11-10
 
 ### Fixed
 - The usage detail window no longer cuts off its bottom. The
