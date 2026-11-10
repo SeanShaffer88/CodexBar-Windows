@@ -20,3 +20,14 @@
 - Full command-line parity for every tray capability, including `--json`.
 - Single instance, no console window in tray mode, no registry writes,
   no telemetry, no external runtime.
+
+## Settings window (v0.4.0)
+
+- Dark single-page window: provider switches, per-provider API key
+  add/change/remove (encrypted with Windows DPAPI, never displayed),
+  refresh interval (5-120 minutes), warning threshold (50-100%),
+  start-with-Windows toggle, data-folder open, and clear-history.
+- Opens from the tray menu, a double-click on the tray icon, or the
+  `settings` command; F1 shows the built-in help.
+- Saving applies to a running tray at once, including its timer.
+- Every value is equally available from the `settings` command line.

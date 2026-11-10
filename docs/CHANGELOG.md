@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.4.0 — unreleased
+
+- **Settings window**: a dark, single-page configuration window (design B)
+  opened from the tray menu's "Settings…" item, by double-clicking the
+  tray icon, or with `codexbar-windows settings`. It covers provider
+  on/off switches, API-key add/change/remove for OpenRouter, DeepSeek,
+  and Moonshot (DPAPI-encrypted, never shown after saving), the refresh
+  interval, the warning threshold, start-with-Windows, and data-folder
+  actions (open folder, clear history with the usual backup kept).
+- The tray warning balloon now uses the configured warning threshold
+  (new `warn_threshold_percent` setting, default 90) instead of a fixed
+  90%.
+- The settings window's changes apply to a running tray immediately,
+  including the refresh timer.
+- `settings` command: shows every setting (text or `--json`) and changes
+  them from the command line with `--refresh`, `--warn`, and
+  `--autostart on|off` (start-with-Windows uses the standard per-user
+  Run entry and is Windows-only).
+- Config schema is now version 2; version 1 files are migrated upward
+  automatically with the new settings at their defaults.
+
 ## v0.3.0 — 2026-11-09
 
 Grouped release: also covers v0.2.0 and v0.1.0 below, which were merged without individual releases.
