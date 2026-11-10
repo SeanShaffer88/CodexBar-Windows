@@ -58,6 +58,8 @@ codexbar-windows refresh           collect fresh numbers now
 codexbar-windows refresh --json    same, machine-readable
 codexbar-windows history           past snapshots
 codexbar-windows report            day-by-day summary from history
+codexbar-windows details           open the usage detail window (cards)
+codexbar-windows breakdown         per-model tokens + cost estimates
 codexbar-windows set-key openrouter
                                    store a provider key (read from stdin,
                                    encrypted with Windows DPAPI); openai
