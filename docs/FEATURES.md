@@ -23,9 +23,9 @@
 - History: every refresh is snapshotted to `data/history.json` (bounded
   to the newest 500) and can be listed or exported as JSON.
 - Refreshes reuse a per-file parse cache (`scan-cache-*.json` in the
-  data folder): only log files that changed are re-read, so a refresh
-  stays fast as your history grows. A missing or damaged cache is
-  rebuilt automatically.
+  data folder): only log files that changed are re-read, and of a
+  file that grew only its new tail, so a refresh stays fast as your
+  history grows. A missing or damaged cache is rebuilt automatically.
 - API keys encrypted with Windows DPAPI; never stored or logged in plain
   text.
 - Usage detail window: one card per provider with its headline number

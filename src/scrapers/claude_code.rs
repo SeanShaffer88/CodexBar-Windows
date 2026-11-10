@@ -273,8 +273,26 @@ fn scan_cached(
                 &mut per_model,
             );
         } else {
-            let text = super::load_text(&f.path);
-            let records = extract(&text);
+            let prev = cache.files.remove(&key);
+            let (records, covered) = match prev {
+                // The file only grew since its records were
+                // extracted: parse just the appended bytes, and
+                // only up to the last complete line — a line still
+                // being written is counted once its newline lands.
+                Some(e) if f.size > e.size => {
+                    let chunk = super::load_range(&f.path, e.covered);
+                    let upto = chunk.rfind('\n').map(|i| i + 1).unwrap_or(0);
+                    let mut recs = e.records;
+                    recs.extend(extract(&chunk[..upto]));
+                    let covered = e.covered + upto as u64;
+                    (recs, covered)
+                }
+                _ => {
+                    let text = super::load_text(&f.path);
+                    let upto = text.rfind('\n').map(|i| i + 1).unwrap_or(0);
+                    (extract(&text[..upto]), upto as u64)
+                }
+            };
             total_records += records.len();
             replay(
                 &records,
@@ -290,6 +308,7 @@ fn scan_cached(
                     crate::scancache::FileEntry {
                         mtime: f.modified_secs(),
                         size: f.size,
+                        covered,
                         records,
                     },
                 );
@@ -447,7 +466,11 @@ mod tests {
         std::fs::create_dir_all(&projects).unwrap();
         let today =
             timeutil::format_utc(timeutil::day_start(NOW) + 3600).replace(' ', "T") + ":00Z";
-        std::fs::write(projects.join("p.jsonl"), msg("a", &today, 100, 50)).unwrap();
+        std::fs::write(
+            projects.join("p.jsonl"),
+            format!("{}\n", msg("a", &today, 100, 50)),
+        )
+        .unwrap();
         let month = |r: &ProviderReport| {
             r.windows
                 .iter()
@@ -477,7 +500,11 @@ mod tests {
         let file = projects.join("p.jsonl");
         std::fs::write(
             &file,
-            format!("{}\n{}", msg("a", &today, 100, 50), msg("b", &today, 10, 5)),
+            format!(
+                "{}\n{}\n",
+                msg("a", &today, 100, 50),
+                msg("b", &today, 10, 5)
+            ),
         )
         .unwrap();
         let month = |r: &ProviderReport| {
@@ -497,8 +524,7 @@ mod tests {
         assert_eq!(month(&second), Some(165.0));
         // An append moves the stamp: the file re-parses, new total.
         let mut text = std::fs::read_to_string(&file).unwrap();
-        text.push('\n');
-        text.push_str(&msg("c", &today, 1000, 0));
+        text.push_str(&format!("{}\n", msg("c", &today, 1000, 0)));
         std::fs::write(&file, text).unwrap();
         let (third, _) = collect_with_breakdown(&home, Some(&cache_dir), now);
         assert_eq!(month(&third), Some(1165.0));
@@ -506,6 +532,62 @@ mod tests {
         std::fs::write(cache_dir.join("scan-cache-claude.json"), "{broken").unwrap();
         let (fourth, _) = collect_with_breakdown(&home, Some(&cache_dir), now);
         assert_eq!(month(&fourth), Some(1165.0));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn cache_tail_append_inflight_line_and_shrink() {
+        let base = std::env::temp_dir().join(format!("cbw-claude-tail-{}", std::process::id()));
+        let home = base.join("home");
+        let projects = home.join("projects");
+        std::fs::create_dir_all(&projects).unwrap();
+        let cache_dir = base.join("data");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        let today =
+            timeutil::format_utc(timeutil::day_start(NOW) + 3600).replace(' ', "T") + ":00Z";
+        let file = projects.join("p.jsonl");
+        std::fs::write(&file, format!("{}\n", msg("a", &today, 100, 50))).unwrap();
+        let now = timeutil::now_unix();
+        let month = |r: &ProviderReport| {
+            r.windows
+                .iter()
+                .find(|w| w.label == "Last 30 days")
+                .and_then(|w| w.used)
+        };
+        let append = |s: &str| {
+            use std::io::Write;
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&file)
+                .unwrap()
+                .write_all(s.as_bytes())
+                .unwrap();
+        };
+        let (r, _) = collect_with_breakdown(&home, Some(&cache_dir), now);
+        assert_eq!(month(&r), Some(150.0));
+        // Half of the next message lands, newline still to come:
+        // not counted yet — and not lost either.
+        let line_b = msg("b", &today, 200, 100);
+        append(&line_b[..line_b.len() / 2]);
+        let (r, _) = collect_with_breakdown(&home, Some(&cache_dir), now);
+        assert_eq!(month(&r), Some(150.0));
+        // The rest of the line plus its newline: now it counts.
+        append(&format!("{}\n", &line_b[line_b.len() / 2..]));
+        let (r, _) = collect_with_breakdown(&home, Some(&cache_dir), now);
+        assert_eq!(month(&r), Some(450.0));
+        // The cache entry's records and consumed offset track it.
+        let text = std::fs::read_to_string(cache_dir.join("scan-cache-claude.json")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let entry = v["files"].as_object().unwrap().values().next().unwrap();
+        assert_eq!(entry["records"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            entry["covered"].as_u64().unwrap(),
+            std::fs::metadata(&file).unwrap().len()
+        );
+        // A shorter rewrite is re-read in full, not tail-matched.
+        std::fs::write(&file, format!("{}\n", msg("c", &today, 7, 3))).unwrap();
+        let (r, _) = collect_with_breakdown(&home, Some(&cache_dir), now);
+        assert_eq!(month(&r), Some(10.0));
         let _ = std::fs::remove_dir_all(&base);
     }
 }

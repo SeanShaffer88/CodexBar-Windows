@@ -281,8 +281,26 @@ fn scan_cached(dir: &Path, cache_dir: Option<&Path>, now: i64) -> Option<(CodexS
             total_records += entry.records.len();
             replay(&entry.records, &mut state, &mut seen, now);
         } else {
-            let text = super::load_text(&f.path);
-            let records = extract(&text);
+            let prev = cache.files.remove(&key);
+            let (records, covered) = match prev {
+                // The file only grew since its events were
+                // extracted: parse just the appended bytes, and
+                // only up to the last complete line — a line still
+                // being written is counted once its newline lands.
+                Some(e) if f.size > e.size => {
+                    let chunk = super::load_range(&f.path, e.covered);
+                    let upto = chunk.rfind('\n').map(|i| i + 1).unwrap_or(0);
+                    let mut recs = e.records;
+                    recs.extend(extract(&chunk[..upto]));
+                    let covered = e.covered + upto as u64;
+                    (recs, covered)
+                }
+                _ => {
+                    let text = super::load_text(&f.path);
+                    let upto = text.rfind('\n').map(|i| i + 1).unwrap_or(0);
+                    (extract(&text[..upto]), upto as u64)
+                }
+            };
             total_records += records.len();
             replay(&records, &mut state, &mut seen, now);
             if cache_file.is_some() {
@@ -291,6 +309,7 @@ fn scan_cached(dir: &Path, cache_dir: Option<&Path>, now: i64) -> Option<(CodexS
                     crate::scancache::FileEntry {
                         mtime: f.modified_secs(),
                         size: f.size,
+                        covered,
                         records,
                     },
                 );
@@ -492,7 +511,11 @@ mod tests {
         std::fs::create_dir_all(&sessions).unwrap();
         let cache_dir = base.join("data");
         std::fs::create_dir_all(&cache_dir).unwrap();
-        std::fs::write(sessions.join("s.jsonl"), line(42.0, 200, 900)).unwrap();
+        std::fs::write(
+            sessions.join("s.jsonl"),
+            format!("{}\n", line(42.0, 200, 900)),
+        )
+        .unwrap();
         let now = crate::timeutil::now_unix();
         let total = |r: &ProviderReport| {
             r.windows
@@ -513,6 +536,22 @@ mod tests {
             .windows
             .iter()
             .any(|w| w.label == "Session (5h)" && w.used_percent == Some(42.0)));
+        // An appended event arrives through the tail read and wins.
+        {
+            use std::io::Write;
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(sessions.join("s.jsonl"))
+                .unwrap()
+                .write_all(format!("{}\n", line(43.0, 300, 950)).as_bytes())
+                .unwrap();
+        }
+        let (third, _) = collect_with_breakdown(&home, Some(&cache_dir), now);
+        assert_eq!(total(&third), Some(950.0));
+        assert!(third
+            .windows
+            .iter()
+            .any(|w| w.label == "Session (5h)" && w.used_percent == Some(43.0)));
         let _ = std::fs::remove_dir_all(&base);
     }
 

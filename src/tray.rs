@@ -528,6 +528,7 @@ pub(crate) mod imp {
                 );
             }
             ID_QUIT => {
+                crate::detail::close();
                 DestroyWindow(hwnd);
             }
             _ => {}
