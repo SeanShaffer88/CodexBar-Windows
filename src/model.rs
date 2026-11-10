@@ -112,6 +112,24 @@ impl ProviderReport {
     }
 }
 
+/// Tray badge for a worst-window percent: the number to draw and its
+/// RGB color (green under 70, amber 70–89, red 90+ — the same bands the
+/// tray bar glyph used). None when there is no percent to show; the
+/// tray then draws its neutral bar glyph.
+/// (Consumed by the Windows tray; exercised directly by tests elsewhere.)
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn tray_badge(percent: Option<f64>) -> Option<(String, [u8; 3])> {
+    let p = percent?;
+    let color = if p >= 90.0 {
+        [230, 60, 50]
+    } else if p >= 70.0 {
+        [240, 170, 40]
+    } else {
+        [60, 200, 110]
+    };
+    Some((format!("{:.0}", p.clamp(0.0, 100.0)), color))
+}
+
 /// Format a token count compactly: 950, 12.3K, 1.2M.
 pub fn fmt_num(n: f64) -> String {
     let a = n.abs();
@@ -161,6 +179,15 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(w.remaining_percent(), Some(75.0));
+    }
+
+    #[test]
+    fn tray_badge_bands_and_rounding() {
+        assert_eq!(tray_badge(None), None);
+        assert_eq!(tray_badge(Some(42.4)), Some(("42".into(), [60, 200, 110])));
+        assert_eq!(tray_badge(Some(70.0)), Some(("70".into(), [240, 170, 40])));
+        assert_eq!(tray_badge(Some(95.0)), Some(("95".into(), [230, 60, 50])));
+        assert_eq!(tray_badge(Some(130.0)), Some(("100".into(), [230, 60, 50])));
     }
 
     #[test]

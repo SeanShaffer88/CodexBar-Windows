@@ -18,6 +18,9 @@ pub struct Providers {
     pub codex: bool,
     #[serde(default = "yes")]
     pub claude_code: bool,
+    /// On by default: reads the Gemini CLI's local sign-in.
+    #[serde(default = "yes")]
+    pub gemini: bool,
     #[serde(default = "yes")]
     pub openrouter: bool,
     /// Off until a key is stored: `set-key deepseek` turns it on.
@@ -43,6 +46,7 @@ impl Default for Providers {
         Providers {
             codex: true,
             claude_code: true,
+            gemini: true,
             openrouter: true,
             deepseek: false,
             moonshot: false,
@@ -73,6 +77,10 @@ pub struct Config {
     /// Optional override for the Codex data directory (defaults to `~/.codex`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex_dir: Option<String>,
+    /// Optional override for the Gemini CLI data directory
+    /// (defaults to `~/.gemini`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gemini_dir: Option<String>,
 }
 
 fn default_refresh() -> u32 {
@@ -93,6 +101,7 @@ impl Default for Config {
             providers: Providers::default(),
             claude_dir: None,
             codex_dir: None,
+            gemini_dir: None,
         }
     }
 }

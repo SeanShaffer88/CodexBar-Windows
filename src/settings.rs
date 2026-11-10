@@ -51,7 +51,7 @@ mod imp {
 
     const ID_SAVE: usize = 1; // IDOK: Enter saves
     const ID_CANCEL: usize = 2; // IDCANCEL: Esc cancels
-    const ID_CHECK0: usize = 100; // five provider checkboxes, 100..104
+    const ID_CHECK0: usize = 100; // eight provider checkboxes, 100..107
     const ID_KEYBTN0: usize = 300; // three key buttons, 300..302
     const ID_REFRESH_EDIT: usize = 400;
     const ID_WARN_EDIT: usize = 401;
@@ -62,9 +62,10 @@ mod imp {
     const ID_HDR_PROVIDERS: usize = 900;
     const ID_HDR_GENERAL: usize = 901;
 
-    const PROVIDERS: [(&str, &str); 7] = [
+    const PROVIDERS: [(&str, &str); 8] = [
         ("codex", "Codex"),
         ("claude-code", "Claude Code"),
+        ("gemini", "Gemini"),
         ("openrouter", "OpenRouter"),
         ("deepseek", "DeepSeek"),
         ("moonshot", "Moonshot"),
@@ -182,7 +183,7 @@ mod imp {
     struct State {
         dir: PathBuf,
         tray: Option<HWND>,
-        checks: [HWND; 7],
+        checks: [HWND; 8],
         key_status: [HWND; 5],
         refresh_edit: HWND,
         warn_edit: HWND,
@@ -239,7 +240,7 @@ mod imp {
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
                 676,
-                640,
+                684,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
                 hinst,
@@ -332,10 +333,11 @@ mod imp {
         match idx {
             0 => cfg.providers.codex,
             1 => cfg.providers.claude_code,
-            2 => cfg.providers.openrouter,
-            3 => cfg.providers.deepseek,
-            4 => cfg.providers.moonshot,
-            5 => cfg.providers.openai,
+            2 => cfg.providers.gemini,
+            3 => cfg.providers.openrouter,
+            4 => cfg.providers.deepseek,
+            5 => cfg.providers.moonshot,
+            6 => cfg.providers.openai,
             _ => cfg.providers.anthropic,
         }
     }
@@ -354,7 +356,7 @@ mod imp {
             );
             let btn = unsafe { GetDlgItem(hwnd, (ID_KEYBTN0 + i) as i32) };
             set_text(btn, if has { "Change…" } else { "Add key…" });
-            set_check(st.checks[i + 2], provider_on(&cfg, i + 2));
+            set_check(st.checks[i + 3], provider_on(&cfg, i + 3));
         }
     }
 
@@ -371,7 +373,7 @@ mod imp {
                 let mut st = Box::new(State {
                     dir: init.dir.clone(),
                     tray: init.tray,
-                    checks: [std::ptr::null_mut(); 7],
+                    checks: [std::ptr::null_mut(); 8],
                     key_status: [std::ptr::null_mut(); 5],
                     refresh_edit: std::ptr::null_mut(),
                     warn_edit: std::ptr::null_mut(),
@@ -387,7 +389,7 @@ mod imp {
                     14,
                     14,
                     632,
-                    352,
+                    396,
                     0,
                     false,
                     s,
@@ -421,24 +423,20 @@ mod imp {
                         s,
                     );
                     set_check(st.checks[i], provider_on(&cfg, i));
-                    if i < 2 {
-                        ctl(
-                            hwnd,
-                            "STATIC",
-                            "Local logs — no key needed",
-                            0,
-                            250,
-                            y + 2,
-                            220,
-                            20,
-                            200 + i,
-                            false,
-                            s,
-                        );
+                    // Source notes for the providers that need no key.
+                    // (Note ids: 200/201 here, 208 for Gemini — 202..207
+                    // belong to the key-status lines below.)
+                    let note = match i {
+                        0 | 1 => Some(("Local logs — no key needed", 200 + i)),
+                        2 => Some(("Gemini CLI sign-in — no key needed", 208)),
+                        _ => None,
+                    };
+                    if let Some((text, id)) = note {
+                        ctl(hwnd, "STATIC", text, 0, 250, y + 2, 260, 20, id, false, s);
                     }
                 }
                 for i in 0..5 {
-                    let y = 42 + ((i + 2) as i32) * 44;
+                    let y = 42 + ((i + 3) as i32) * 44;
                     st.key_status[i] = ctl(
                         hwnd,
                         "STATIC",
@@ -472,7 +470,7 @@ mod imp {
                     "Keys are encrypted with Windows DPAPI and never shown after saving.",
                     0,
                     28,
-                    336,
+                    380,
                     590,
                     16,
                     902,
@@ -486,7 +484,7 @@ mod imp {
                     "",
                     BS_GROUPBOX as u32,
                     14,
-                    380,
+                    424,
                     632,
                     150,
                     0,
@@ -499,7 +497,7 @@ mod imp {
                     "GENERAL",
                     0,
                     28,
-                    371,
+                    415,
                     130,
                     18,
                     ID_HDR_GENERAL,
@@ -512,7 +510,7 @@ mod imp {
                     "Refresh every",
                     0,
                     28,
-                    406,
+                    450,
                     110,
                     20,
                     0,
@@ -525,36 +523,36 @@ mod imp {
                     &cfg.refresh_minutes.to_string(),
                     WS_BORDER | (ES_NUMBER as u32) | WS_TABSTOP,
                     142,
-                    403,
+                    447,
                     56,
                     24,
                     ID_REFRESH_EDIT,
                     false,
                     s,
                 );
-                ctl(hwnd, "STATIC", "minutes", 0, 204, 406, 60, 20, 0, false, s);
-                ctl(hwnd, "STATIC", "Warn at", 0, 300, 406, 60, 20, 0, false, s);
+                ctl(hwnd, "STATIC", "minutes", 0, 204, 450, 60, 20, 0, false, s);
+                ctl(hwnd, "STATIC", "Warn at", 0, 300, 450, 60, 20, 0, false, s);
                 st.warn_edit = ctl(
                     hwnd,
                     "EDIT",
                     &cfg.warn_threshold_percent.to_string(),
                     WS_BORDER | (ES_NUMBER as u32) | WS_TABSTOP,
                     362,
-                    403,
+                    447,
                     56,
                     24,
                     ID_WARN_EDIT,
                     false,
                     s,
                 );
-                ctl(hwnd, "STATIC", "% used", 0, 424, 406, 60, 20, 0, false, s);
+                ctl(hwnd, "STATIC", "% used", 0, 424, 450, 60, 20, 0, false, s);
                 st.autostart = ctl(
                     hwnd,
                     "BUTTON",
                     "Start with Windows",
                     (BS_AUTOCHECKBOX as u32) | WS_TABSTOP,
                     28,
-                    444,
+                    488,
                     220,
                     22,
                     ID_AUTOSTART,
@@ -568,7 +566,7 @@ mod imp {
                     "Data folder:",
                     0,
                     300,
-                    446,
+                    490,
                     80,
                     20,
                     0,
@@ -581,7 +579,7 @@ mod imp {
                     &st.dir.to_string_lossy(),
                     SS_ENDELLIPSIS,
                     384,
-                    446,
+                    490,
                     232,
                     20,
                     0,
@@ -594,7 +592,7 @@ mod imp {
                     "Open data",
                     (BS_OWNERDRAW as u32) | WS_TABSTOP,
                     28,
-                    482,
+                    526,
                     100,
                     28,
                     ID_OPEN_DATA,
@@ -607,7 +605,7 @@ mod imp {
                     "Clear history",
                     (BS_OWNERDRAW as u32) | WS_TABSTOP,
                     138,
-                    482,
+                    526,
                     110,
                     28,
                     ID_CLEAR_HISTORY,
@@ -620,7 +618,7 @@ mod imp {
                     "",
                     0,
                     260,
-                    486,
+                    530,
                     356,
                     20,
                     ID_FEEDBACK,
@@ -634,7 +632,7 @@ mod imp {
                     "Save",
                     (BS_OWNERDRAW as u32) | (BS_DEFPUSHBUTTON as u32) | WS_TABSTOP,
                     432,
-                    546,
+                    590,
                     100,
                     32,
                     ID_SAVE,
@@ -647,7 +645,7 @@ mod imp {
                     "Cancel",
                     (BS_OWNERDRAW as u32) | WS_TABSTOP,
                     542,
-                    546,
+                    590,
                     100,
                     32,
                     ID_CANCEL,
@@ -662,7 +660,7 @@ mod imp {
                 let id = GetDlgCtrlID(lp as HWND);
                 let color = if id == ID_HDR_PROVIDERS as i32 || id == ID_HDR_GENERAL as i32 {
                     RED_TEXT
-                } else if (200..=206).contains(&id) || id == 902 {
+                } else if (200..=208).contains(&id) || id == 902 {
                     DIM
                 } else {
                     INK
@@ -770,11 +768,12 @@ mod imp {
         let (mut cfg, _) = config::load(&st.dir);
         cfg.providers.codex = checked(st.checks[0]);
         cfg.providers.claude_code = checked(st.checks[1]);
-        cfg.providers.openrouter = checked(st.checks[2]);
-        cfg.providers.deepseek = checked(st.checks[3]);
-        cfg.providers.moonshot = checked(st.checks[4]);
-        cfg.providers.openai = checked(st.checks[5]);
-        cfg.providers.anthropic = checked(st.checks[6]);
+        cfg.providers.gemini = checked(st.checks[2]);
+        cfg.providers.openrouter = checked(st.checks[3]);
+        cfg.providers.deepseek = checked(st.checks[4]);
+        cfg.providers.moonshot = checked(st.checks[5]);
+        cfg.providers.openai = checked(st.checks[6]);
+        cfg.providers.anthropic = checked(st.checks[7]);
         cfg.refresh_minutes = refresh;
         cfg.warn_threshold_percent = warn;
         let want_auto = checked(st.autostart);

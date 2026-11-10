@@ -3,7 +3,9 @@
 
 use crate::config::Config;
 use crate::model::ProviderReport;
-use crate::scrapers::{anthropic, claude_code, codex, deepseek, moonshot, openai, openrouter};
+use crate::scrapers::{
+    anthropic, claude_code, codex, deepseek, gemini, moonshot, openai, openrouter,
+};
 use crate::store;
 use std::path::{Path, PathBuf};
 
@@ -30,6 +32,15 @@ pub fn collect_all(cfg: &Config, data_dir: &Path, now: i64) -> Vec<ProviderRepor
             .or_else(|| home.as_ref().map(|h| h.join(".claude")))
             .unwrap_or_else(|| PathBuf::from(".claude"));
         out.push(claude_code::collect(&dir, now));
+    }
+    if cfg.providers.gemini {
+        let dir = cfg
+            .gemini_dir
+            .as_ref()
+            .map(PathBuf::from)
+            .or_else(|| home.as_ref().map(|h| h.join(".gemini")))
+            .unwrap_or_else(|| PathBuf::from(".gemini"));
+        out.push(gemini::collect(&dir, now));
     }
     if cfg.providers.openrouter {
         out.push(openrouter::collect(data_dir, now));
@@ -90,6 +101,84 @@ pub fn worst_window(reports: &[ProviderReport]) -> Option<(String, String, f64)>
         }
     }
     best
+}
+
+/// Display lines for the detail window's per-model breakdown section:
+/// the local providers' last-30-days totals, busiest model first
+/// (at most 8). Estimates are public list-price estimates.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn breakdown_lines(cfg: &Config, now: i64) -> Vec<String> {
+    let home = crate::config::home_dir();
+    let resolve = |opt: &Option<String>, leaf: &str| {
+        opt.as_ref()
+            .map(PathBuf::from)
+            .or_else(|| home.as_ref().map(|h| h.join(leaf)))
+            .unwrap_or_else(|| PathBuf::from(leaf))
+    };
+    let claude_rows =
+        crate::scrapers::claude_code::model_breakdown(&resolve(&cfg.claude_dir, ".claude"), now);
+    let codex_rows =
+        crate::scrapers::codex::model_breakdown(&resolve(&cfg.codex_dir, ".codex"), now);
+    format_breakdown_lines(claude_rows.as_deref(), codex_rows.as_deref())
+}
+
+/// Pure formatting behind `breakdown_lines`: merge both providers'
+/// per-model month rows, drop zero rows, sort by tokens, cap at 8.
+pub fn format_breakdown_lines(
+    claude_rows: Option<&[(String, crate::scrapers::claude_code::ModelUse)]>,
+    codex_rows: Option<&[(String, crate::scrapers::codex::MonthUse)]>,
+) -> Vec<String> {
+    let est = |model: &str,
+               uncached: i64,
+               cache_read: i64,
+               cache_write: i64,
+               output: i64|
+     -> Option<f64> {
+        crate::pricing::price_for(model)
+            .map(|p| crate::pricing::estimate_usd(uncached, cache_read, cache_write, output, &p))
+    };
+    let mut rows: Vec<(String, String, i64, Option<f64>)> = Vec::new();
+    if let Some(rs) = claude_rows {
+        for (m, mu) in rs {
+            let t = mu.month;
+            let tokens = t.input + t.output + t.cache_create + t.cache_read;
+            if tokens > 0 {
+                rows.push((
+                    "Claude Code".to_string(),
+                    m.clone(),
+                    tokens,
+                    est(m, t.input, t.cache_read, t.cache_create, t.output),
+                ));
+            }
+        }
+    }
+    if let Some(rs) = codex_rows {
+        for (m, mu) in rs {
+            let tokens = mu.input + mu.output;
+            if tokens > 0 {
+                rows.push((
+                    "Codex".to_string(),
+                    m.clone(),
+                    tokens,
+                    est(m, (mu.input - mu.cached).max(0), mu.cached, 0, mu.output),
+                ));
+            }
+        }
+    }
+    rows.sort_by_key(|r| std::cmp::Reverse(r.2));
+    rows.truncate(8);
+    rows.iter()
+        .map(|(prov, m, tokens, e)| match e {
+            Some(v) => format!(
+                "{prov} · {m} — {} tokens · est. ${v:.2}",
+                crate::model::fmt_num(*tokens as f64)
+            ),
+            None => format!(
+                "{prov} · {m} — {} tokens",
+                crate::model::fmt_num(*tokens as f64)
+            ),
+        })
+        .collect()
 }
 
 /// Collect and record a history snapshot.
@@ -250,6 +339,39 @@ mod tests {
         assert!(!crossed_threshold(Some(95.0), Some(80.0), 90.0));
         assert!(crossed_threshold(None, Some(91.0), 90.0));
         assert!(!crossed_threshold(None, None, 90.0));
+    }
+
+    #[test]
+    fn breakdown_lines_sort_cap_and_label() {
+        use crate::scrapers::claude_code::{ModelUse, Use};
+        use crate::scrapers::codex::MonthUse;
+        let claude = vec![(
+            "claude-sonnet-4-5".to_string(),
+            ModelUse {
+                today: Use::default(),
+                month: Use {
+                    input: 100,
+                    output: 50,
+                    cache_create: 0,
+                    cache_read: 850,
+                },
+            },
+        )];
+        let codex = vec![(
+            "gpt-5".to_string(),
+            MonthUse {
+                input: 2_000,
+                cached: 500,
+                output: 100,
+            },
+        )];
+        let lines = format_breakdown_lines(Some(&claude), Some(&codex));
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].starts_with("Codex · gpt-5"));
+        assert!(lines[0].contains("2.10K tokens"));
+        assert!(lines[0].contains("est. $"));
+        assert!(lines[1].starts_with("Claude Code · claude-sonnet-4-5"));
+        assert!(format_breakdown_lines(None, None).is_empty());
     }
 
     #[test]

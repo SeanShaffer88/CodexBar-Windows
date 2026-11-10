@@ -386,7 +386,10 @@ mod imp {
         tray: Option<HWND>,
         cards: Vec<Card>,
         chart: Vec<DayTokens>,
-        chart_shown: bool,
+        breakdown: Vec<String>,
+        /// Total extra height the window was sized with (chart +
+        /// breakdown sections); a refresh resizes when this changes.
+        extra_h: i32,
         fetched: i64,
         f_label: HFONT,
         f_big: HFONT,
@@ -404,15 +407,25 @@ mod imp {
         daily_tokens(&store::all(dir), now, 14, offset)
     }
 
-    fn load_cards(dir: &std::path::Path) -> (Vec<Card>, i64, Vec<DayTokens>) {
+    fn load_cards(dir: &std::path::Path) -> (Vec<Card>, i64, Vec<DayTokens>, Vec<String>) {
+        let (cfg, _) = config::load(dir);
         if let Some(snap) = store::latest(dir) {
             let now = timeutil::now_unix();
-            return (cards_for(&snap.reports, now), snap.at, load_chart(dir, now));
+            return (
+                cards_for(&snap.reports, now),
+                snap.at,
+                load_chart(dir, now),
+                ops::breakdown_lines(&cfg, now),
+            );
         }
-        let (cfg, _) = config::load(dir);
         let now = timeutil::now_unix();
         let reports = ops::refresh(&cfg, dir, now);
-        (cards_for(&reports, now), now, load_chart(dir, now))
+        (
+            cards_for(&reports, now),
+            now,
+            load_chart(dir, now),
+            ops::breakdown_lines(&cfg, now),
+        )
     }
 
     fn rows(n: usize) -> i32 {
@@ -430,8 +443,22 @@ mod imp {
         }
     }
 
-    fn win_height(n: usize, chart: &[DayTokens]) -> i32 {
-        60 + rows(n) * 160 + chart_extra(chart) + 52
+    /// Extra window height for the breakdown section: title, one line
+    /// per model, and padding.
+    fn breakdown_extra(lines: &[String]) -> i32 {
+        if lines.is_empty() {
+            0
+        } else {
+            30 + (lines.len() as i32) * 18 + 6
+        }
+    }
+
+    fn sections_extra(chart: &[DayTokens], breakdown: &[String]) -> i32 {
+        chart_extra(chart) + breakdown_extra(breakdown)
+    }
+
+    fn win_height(n: usize, chart: &[DayTokens], breakdown: &[String]) -> i32 {
+        60 + rows(n) * 160 + sections_extra(chart, breakdown) + 52
     }
 
     pub fn open(tray: Option<HWND>) -> i32 {
@@ -444,7 +471,7 @@ mod imp {
                 return 0;
             }
             let dir = config::data_dir_env();
-            let (cards, _, chart) = load_cards(&dir);
+            let (cards, _, chart, breakdown) = load_cards(&dir);
             let hinst = GetModuleHandleW(std::ptr::null());
             let class_name = wide("CodexBarWinDetail");
             let bg = CreateSolidBrush(BG);
@@ -470,7 +497,7 @@ mod imp {
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
                 680,
-                win_height(cards.len(), &chart),
+                win_height(cards.len(), &chart, &breakdown),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
                 hinst,
@@ -690,8 +717,22 @@ mod imp {
                 }
             }
         }
+        // Per-model breakdown, when the local logs produced rows.
+        if !st.breakdown.is_empty() {
+            let top = 60 + rows(st.cards.len()) * 160 + chart_extra(&st.chart) + 8;
+            text_out(dc, 18, top, st.f_norm, INK, "Per-model breakdown");
+            let right = "last 30 days · list-price estimates";
+            let mut sz: SIZE = std::mem::zeroed();
+            let old = SelectObject(dc, st.f_small);
+            GetTextExtentPoint32W(dc, wide(right).as_ptr(), right.len() as i32, &mut sz);
+            SelectObject(dc, old);
+            text_out(dc, rc.right - sz.cx - 18, top + 2, st.f_small, DIM, right);
+            for (i, line) in st.breakdown.iter().enumerate() {
+                text_out(dc, 18, top + 26 + (i as i32) * 18, st.f_small, DIM, line);
+            }
+        }
         // Footer note.
-        let fy = 60 + rows(st.cards.len()) * 160 + chart_extra(&st.chart) + 4;
+        let fy = 60 + rows(st.cards.len()) * 160 + sections_extra(&st.chart, &st.breakdown) + 4;
         text_out(
             dc,
             18,
@@ -742,13 +783,15 @@ mod imp {
             WM_CREATE => {
                 let cs = &*(lp as *const CREATESTRUCTW);
                 let init = Box::from_raw(cs.lpCreateParams as *mut Init);
-                let (cards, fetched, chart) = load_cards(&init.dir);
+                let (cards, fetched, chart, breakdown) = load_cards(&init.dir);
+                let extra_h = sections_extra(&chart, &breakdown);
                 let st = Box::new(State {
                     dir: init.dir.clone(),
                     tray: init.tray,
                     cards,
-                    chart_shown: chart_visible(&chart),
                     chart,
+                    breakdown,
+                    extra_h,
                     fetched,
                     f_label: font(-13, 700),
                     f_big: font(-34, 700),
@@ -762,7 +805,7 @@ mod imp {
                     "Refresh",
                     (BS_OWNERDRAW as u32) | WS_TABSTOP,
                     432,
-                    win_height(n, &st.chart) - 44,
+                    win_height(n, &st.chart, &st.breakdown) - 44,
                     100,
                     30,
                     ID_REFRESH,
@@ -773,7 +816,7 @@ mod imp {
                     "Close",
                     (BS_OWNERDRAW as u32) | WS_TABSTOP,
                     542,
-                    win_height(n, &st.chart) - 44,
+                    win_height(n, &st.chart, &st.breakdown) - 44,
                     100,
                     30,
                     ID_CLOSE,
@@ -799,13 +842,14 @@ mod imp {
                     let reports = ops::refresh(&cfg, &st.dir, now);
                     st.cards = cards_for(&reports, now);
                     st.chart = load_chart(&st.dir, now);
+                    st.breakdown = ops::breakdown_lines(&cfg, now);
                     st.fetched = now;
-                    // The window was sized for the chart state at
+                    // The window was sized for the section state at
                     // creation; resize if a refresh changed it.
-                    let shown = chart_visible(&st.chart);
-                    if shown != st.chart_shown {
-                        st.chart_shown = shown;
-                        let h = win_height(st.cards.len(), &st.chart);
+                    let extra = sections_extra(&st.chart, &st.breakdown);
+                    if extra != st.extra_h {
+                        st.extra_h = extra;
+                        let h = win_height(st.cards.len(), &st.chart, &st.breakdown);
                         SetWindowPos(
                             hwnd,
                             std::ptr::null_mut(),

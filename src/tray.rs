@@ -41,6 +41,7 @@ pub(crate) mod imp {
     const ID_QUIT: usize = 1004;
 
     static REPORTS: Mutex<Vec<ProviderReport>> = Mutex::new(Vec::new());
+    static LAST_ICON: Mutex<usize> = Mutex::new(0);
     static PREV_WORST: Mutex<Option<f64>> = Mutex::new(None);
     static DATA_DIR: Mutex<PathBuf> = Mutex::new(PathBuf::new());
     static REFRESH_MIN: Mutex<u32> = Mutex::new(15);
@@ -166,9 +167,108 @@ pub(crate) mod imp {
         s.chars().take(120).collect()
     }
 
-    /// Draw the tray icon at runtime: a dark square with a usage bar whose
-    /// fill and color reflect the worst provider window.
+    /// Draw the tray icon at runtime: the worst window's percent as a
+    /// number (v0.9.0, like the original's menu-bar text) in the band
+    /// color; with no percent data, a dark square with a usage bar.
     unsafe fn make_icon(percent: Option<f64>) -> HICON {
+        if let Some((text, color)) = crate::model::tray_badge(percent) {
+            let icon = make_number_icon(&text, color);
+            if !icon.is_null() {
+                return icon;
+            }
+        }
+        make_bar_icon(percent)
+    }
+
+    /// The percent as bold text on the dark square, drawn with GDI into
+    /// a 32-bit DIB (alpha forced opaque afterwards — GDI does not
+    /// write the alpha channel).
+    unsafe fn make_number_icon(text: &str, color: [u8; 3]) -> HICON {
+        const S: i32 = 32;
+        let mut bmi: BITMAPINFO = std::mem::zeroed();
+        bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+        bmi.bmiHeader.biWidth = S;
+        bmi.bmiHeader.biHeight = -S; // top-down
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+        let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
+        let dc = CreateCompatibleDC(std::ptr::null_mut());
+        if dc.is_null() {
+            return std::ptr::null_mut();
+        }
+        let dib = CreateDIBSection(dc, &bmi, DIB_RGB_COLORS, &mut bits, std::ptr::null_mut(), 0);
+        if dib.is_null() || bits.is_null() {
+            DeleteDC(dc);
+            return std::ptr::null_mut();
+        }
+        let old_bmp = SelectObject(dc, dib);
+        let bg = CreateSolidBrush(24 | (24 << 8) | (28 << 16));
+        let mut rc = RECT {
+            left: 0,
+            top: 0,
+            right: S,
+            bottom: S,
+        };
+        FillRect(dc, &rc, bg);
+        DeleteObject(bg);
+        let height = if text.len() >= 3 { -15 } else { -21 };
+        let font = CreateFontW(
+            height,
+            0,
+            0,
+            0,
+            700,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            wide("Segoe UI").as_ptr(),
+        );
+        let old_font = SelectObject(dc, font);
+        SetBkMode(dc, 1); // TRANSPARENT
+        SetTextColor(
+            dc,
+            (color[0] as u32) | ((color[1] as u32) << 8) | ((color[2] as u32) << 16),
+        );
+        DrawTextW(
+            dc,
+            wide(text).as_ptr(),
+            -1,
+            &mut rc,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+        );
+        SelectObject(dc, old_font);
+        DeleteObject(font);
+        SelectObject(dc, old_bmp);
+        // Force every pixel opaque; the backdrop is the whole square.
+        let px = std::slice::from_raw_parts_mut(bits as *mut u8, (S * S * 4) as usize);
+        for i in (0..px.len()).step_by(4) {
+            px[i + 3] = 255;
+        }
+        DeleteDC(dc);
+        let mask_bits = vec![0u8; (S * S / 8) as usize];
+        let mask = CreateBitmap(S, S, 1, 1, mask_bits.as_ptr() as *const _);
+        let info = ICONINFO {
+            fIcon: 1,
+            xHotspot: 0,
+            yHotspot: 0,
+            hbmMask: mask,
+            hbmColor: dib,
+        };
+        let icon = CreateIconIndirect(&info);
+        DeleteObject(dib);
+        DeleteObject(mask);
+        icon
+    }
+
+    /// The original bar glyph: fill width and color follow the worst
+    /// provider window. Kept for the no-percent case.
+    unsafe fn make_bar_icon(percent: Option<f64>) -> HICON {
         const S: i32 = 32;
         let mut px = vec![0u8; (S * S * 4) as usize];
         let (fr, fg, fb) = match percent {
@@ -226,17 +326,29 @@ pub(crate) mod imp {
         nid.hIcon = make_icon(percent);
         set_tip(&mut nid);
         Shell_NotifyIconW(NIM_ADD, &nid);
+        *LAST_ICON.lock().unwrap() = nid.hIcon as usize;
     }
 
     unsafe fn update_icon(hwnd: HWND) {
+        let icon = make_icon(worst_percent());
+        if icon.is_null() {
+            return;
+        }
         let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
         nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
         nid.hWnd = hwnd;
         nid.uID = 1;
         nid.uFlags = NIF_ICON | NIF_TIP;
-        nid.hIcon = make_icon(worst_percent());
+        nid.hIcon = icon;
         set_tip(&mut nid);
         Shell_NotifyIconW(NIM_MODIFY, &nid);
+        // The shell copies the icon, so the previous handle is ours
+        // to release (the old code kept every refresh's icon alive).
+        let mut last = LAST_ICON.lock().unwrap();
+        if *last != 0 && *last != icon as usize {
+            DestroyIcon(*last as HICON);
+        }
+        *last = icon as usize;
     }
 
     unsafe fn set_tip(nid: &mut NOTIFYICONDATAW) {

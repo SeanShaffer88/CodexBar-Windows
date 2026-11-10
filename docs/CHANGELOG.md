@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.9.0 — Unreleased
+
+### Added
+- Gemini provider: per-family quotas (Pro, Flash, Flash Lite) and the
+  account plan, read through the Gemini CLI's own local sign-in — the
+  same source the original uses. No key to store; the sign-in file is
+  only read, never changed. Since June 2026 Google no longer serves
+  individual accounts through this quota service; when that is the
+  answer, the provider says so in plain words.
+- Per-model breakdown section in the usage detail window: the local
+  providers' last-30-days totals per model, busiest first, with
+  list-price estimates — the same numbers as the `breakdown` command.
+
+### Changed
+- The tray icon now shows the busiest window's percent as a number,
+  colored by the usual bands (green, amber at 70%, red at 90%),
+  instead of a fill bar. With no percent data it keeps the bar glyph.
+
 ## v0.8.0 — Unreleased
 
 ### Added

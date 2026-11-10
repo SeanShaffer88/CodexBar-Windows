@@ -1,7 +1,8 @@
 # Features
 
-- Tray icon with a live usage bar (green / amber at 70% / red at 90%) for
-  the busiest provider window, plus a summary tooltip.
+- Tray icon that shows the busiest provider window's percent as a
+  number (green / amber at 70% / red at 90%), plus a summary tooltip;
+  with no percent data it falls back to a usage-bar glyph.
 - Popup menu breakdown per provider, with reset countdowns.
 - Providers in v0.1.0:
   - Codex (local CLI logs): session (5h) + weekly windows, plan, totals.
@@ -31,7 +32,11 @@
 - Tokens-per-day chart in the detail window: the last 14 days from
   the saved history, for the providers that keep a daily count.
 - `breakdown` command: per-model token totals and cost estimates for
-  the local-log providers.
+  the local-log providers. The same per-model list (last 30 days,
+  busiest first) also appears as a section in the detail window.
+- Gemini provider: per-family quotas (Pro / Flash / Flash Lite) and
+  the account's plan, read through the Gemini CLI's own local sign-in
+  — the same source the original uses. No API key to store.
 - Per-Monitor v2 DPI awareness for crisp rendering on scaled displays.
 - Its own application icon on the executable, the windows, and the
   installer.

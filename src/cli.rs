@@ -238,6 +238,7 @@ fn providers_cmd(dir: &Path) -> i32 {
     let rows = [
         ("codex", "Codex", cfg.providers.codex),
         ("claude-code", "Claude Code", cfg.providers.claude_code),
+        ("gemini", "Gemini", cfg.providers.gemini),
         ("openrouter", "OpenRouter", cfg.providers.openrouter),
         ("deepseek", "DeepSeek", cfg.providers.deepseek),
         ("moonshot", "Moonshot", cfg.providers.moonshot),
@@ -553,6 +554,7 @@ fn show_settings(dir: &Path, json: bool) -> i32 {
             "providers": {
                 "codex": { "on": cfg.providers.codex, "key": "local logs" },
                 "claude-code": { "on": cfg.providers.claude_code, "key": "local logs" },
+                "gemini": { "on": cfg.providers.gemini, "key": "local sign-in" },
                 "openrouter": { "on": cfg.providers.openrouter, "key_stored": key("openrouter") },
                 "deepseek": { "on": cfg.providers.deepseek, "key_stored": key("deepseek") },
                 "moonshot": { "on": cfg.providers.moonshot, "key_stored": key("moonshot") },

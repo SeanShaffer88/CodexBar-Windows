@@ -1,4 +1,4 @@
-# QUALITY.md — CodexBar-Windows v0.8.0 (unreleased)
+# QUALITY.md — CodexBar-Windows v0.9.0 (unreleased)
 
 Scored from evidence gathered at build time. Any Fail means not done.
 
