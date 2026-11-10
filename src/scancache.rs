@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Safety valve: past this many cached records in one cache, the
 /// file would be too large to be worth loading — stop saving it
@@ -29,7 +29,15 @@ pub const MAX_RECORDS: usize = 2_000_000;
 #[derive(Serialize, Deserialize, Clone)]
 pub struct FileEntry<R> {
     pub mtime: i64,
+    /// The file's size when the entry was written.
     pub size: u64,
+    /// How many leading bytes of the file `records` covers: the
+    /// offset just past the last complete (newline-terminated)
+    /// line extracted. A line still being written at the end of
+    /// the file stays uncovered — and uncounted — until its
+    /// newline lands, when the tail read picks it up whole.
+    /// A file that only grew is re-read from here, not from 0.
+    pub covered: u64,
     pub records: Vec<R>,
 }
 

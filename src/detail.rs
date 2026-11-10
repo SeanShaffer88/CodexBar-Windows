@@ -199,6 +199,15 @@ pub fn open(tray: Option<windows_sys::Win32::Foundation::HWND>) -> i32 {
     imp::open(tray)
 }
 
+#[cfg(not(windows))]
+#[allow(dead_code)]
+pub fn close() {}
+
+#[cfg(windows)]
+pub fn close() {
+    imp::close()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -374,6 +383,7 @@ mod imp {
     const WM_DETAIL_LOADED: u32 = WM_APP + 30;
 
     static OPEN: AtomicBool = AtomicBool::new(false);
+    static DONE: AtomicBool = AtomicBool::new(false);
     static WIN: Mutex<usize> = Mutex::new(0);
     static LOADED: Mutex<Option<Loaded>> = Mutex::new(None);
 
@@ -665,16 +675,47 @@ mod imp {
                 return 1;
             }
             *WIN.lock().unwrap() = hwnd as usize;
+            DONE.store(false, Ordering::SeqCst);
+            // Modal-style loop: pump until the window closes (DONE,
+            // set by WM_DESTROY — the settings window's pattern).
+            // Ending the loop through a posted quit instead would
+            // swallow a quit meant for the tray loop: Quit from the
+            // tray menu then killed the tray window and icon but
+            // left this window open and the program running.
             let mut msg: MSG = std::mem::zeroed();
-            while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
+            loop {
+                let r = GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0);
+                if r <= 0 {
+                    if tray.is_some() {
+                        PostQuitMessage(0); // preserve a pending quit for the tray loop
+                    }
+                    break;
+                }
                 if IsDialogMessageW(hwnd, &msg) == 0 {
                     TranslateMessage(&msg);
                     DispatchMessageW(&msg);
+                }
+                if DONE.load(Ordering::SeqCst) {
+                    break;
                 }
             }
             OPEN.store(false, Ordering::SeqCst);
             *WIN.lock().unwrap() = 0;
             0
+        }
+    }
+
+    /// Ask the open detail window (if any) to close, through its
+    /// normal close path. The tray's Quit calls this first, so
+    /// quitting never leaves the window behind.
+    pub fn close() {
+        if OPEN.load(Ordering::SeqCst) {
+            let w = *WIN.lock().unwrap();
+            if w != 0 {
+                unsafe {
+                    PostMessageW(w as HWND, WM_CLOSE, 0, 0);
+                }
+            }
         }
     }
 
@@ -1097,7 +1138,7 @@ mod imp {
                     DeleteObject(st.f_norm);
                     DeleteObject(st.f_small);
                 }
-                PostQuitMessage(0);
+                DONE.store(true, Ordering::SeqCst);
                 0
             }
             _ => DefWindowProcW(hwnd, msg, wp, lp),
