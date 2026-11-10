@@ -1,26 +1,23 @@
-# CodexBar-Windows v0.9.1
+# CodexBar-Windows v0.9.2
 
-A patch release that restores the application icon in the shipped
-program. Everything else is unchanged from v0.9.0.
+## Fixes
 
-## Fix
-
-- The v0.9.0 executable shipped without its embedded application
-  icon: the Microsoft resource compiler rejected the resource
-  script the build generates in the release environment (the
-  script named the icon with an unescaped single-backslash path),
-  the build continued with only a warning, and nothing checked
-  the result — so the program arrived with the generic placeholder
-  icon instead of the usage-meters icon. The path is now escaped,
-  the compiler's error output is captured in the build log when
-  it fails, and the CI and release pipelines verify that every
-  icon image is inside the built program — a release now fails
-  instead of shipping without the icon.
+- The usage detail window opens instantly. It used to collect
+  everything before appearing — and scanned the local logs twice,
+  once for the cards and once for the breakdown — so on a machine
+  with large logs it took seconds to show. It now opens with the
+  last known numbers from the saved snapshot (breakdown lines are
+  stored in the snapshot too) and finishes loading in the
+  background; a refresh likewise runs in the background instead of
+  freezing the window, and one collection now produces both the
+  cards and the breakdown.
+- The detail window's "Refreshed" time is the local time. It
+  printed UTC before.
 
 ## Install
 
-- `CodexBar-Windows-v0.9.1-x64-Setup.exe` — installer
-- `CodexBar-Windows-v0.9.1-x64-Portable.zip` — unzip anywhere and run
+- `CodexBar-Windows-v0.9.2-x64-Setup.exe` — installer
+- `CodexBar-Windows-v0.9.2-x64-Portable.zip` — unzip anywhere and run
 - `SHA256SUMS.txt` — checksums for both
 
 Binaries are unsigned (no code-signing certificate); Windows SmartScreen
