@@ -61,6 +61,8 @@ codexbar-windows set-key openrouter
                                    store an OpenRouter key (read from
                                    stdin, encrypted with Windows DPAPI)
 codexbar-windows config refresh 30 set the refresh interval (minutes)
+codexbar-windows settings          open the settings window (Windows)
+codexbar-windows settings --warn 85  set the warning threshold
 codexbar-windows --help            full command list, works offline
 ```
 
