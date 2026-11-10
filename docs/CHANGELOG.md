@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.9.0 — Unreleased
+## v0.9.0 — 2026-11-10
 
 ### Added
 - Gemini provider: per-family quotas (Pro, Flash, Flash Lite) and the
@@ -18,7 +18,7 @@
   colored by the usual bands (green, amber at 70%, red at 90%),
   instead of a fill bar. With no percent data it keeps the bar glyph.
 
-## v0.8.0 — Unreleased
+## v0.8.0 — grouped into v0.9.0
 
 ### Added
 - Tokens-per-day chart in the usage detail window: the last 14 days
@@ -33,7 +33,7 @@
   opens the usage detail window on the running copy, instead of
   showing an "already running" message.
 
-## v0.7.0 — Unreleased
+## v0.7.0 — grouped into v0.9.0
 
 ### Added
 - Application icon: the program now has its own icon (three usage
