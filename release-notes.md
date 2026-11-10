@@ -1,20 +1,28 @@
-# CodexBar-Windows v0.10.0
+# CodexBar-Windows v0.10.1
 
-## Added
+## Fixed
 
-- A per-file parse cache for the local log scans
-  (`scan-cache-claude.json` and `scan-cache-codex.json` in the
-  data folder). Each log file's extracted records are stored
-  once and replayed on later refreshes; only files that changed
-  since the last scan are read again. Refreshes over a large
-  history no longer re-parse a month of logs every time. The
-  numbers are unchanged, and a missing or damaged cache file is
-  simply rebuilt.
+- Quitting from the tray menu while the usage detail window is
+  open now actually quits. The detail window's message loop
+  used to consume the quit signal for itself, leaving the
+  window on screen and the program running with no tray icon.
+  The window now closes through its normal path first, and the
+  quit reaches the main loop (the settings window already
+  worked this way).
+
+## Changed
+
+- The log scan cache now reads only the new tail of a log file
+  that grew — the actively-written session files are no longer
+  re-read in full on every refresh. A line still being written
+  (no newline yet) is counted once it completes: never lost,
+  never half-counted. The first refresh after upgrading
+  rebuilds the cache once.
 
 ## Install
 
-- `CodexBar-Windows-v0.10.0-x64-Setup.exe` — installer
-- `CodexBar-Windows-v0.10.0-x64-Portable.zip` — unzip anywhere and run
+- `CodexBar-Windows-v0.10.1-x64-Setup.exe` — installer
+- `CodexBar-Windows-v0.10.1-x64-Portable.zip` — unzip anywhere and run
 - `SHA256SUMS.txt` — checksums for both
 
 Binaries are unsigned (no code-signing certificate); Windows SmartScreen
