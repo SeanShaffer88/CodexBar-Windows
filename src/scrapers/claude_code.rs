@@ -9,7 +9,7 @@
 
 use crate::model::{ProviderReport, UsageWindow};
 use crate::timeutil;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -17,6 +17,31 @@ pub struct TokenTotals {
     pub today: i64,
     pub week: i64,
     pub month: i64,
+}
+
+/// Token mix for one model, used for list-price cost estimates.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct Use {
+    pub input: i64,
+    pub output: i64,
+    pub cache_create: i64,
+    pub cache_read: i64,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct ModelUse {
+    pub today: Use,
+    pub month: Use,
+}
+
+fn usage_parts(v: &serde_json::Value) -> Use {
+    let g = |k: &str| v.get(k).and_then(|x| x.as_i64()).unwrap_or(0);
+    Use {
+        input: g("input_tokens"),
+        output: g("output_tokens"),
+        cache_create: g("cache_creation_input_tokens"),
+        cache_read: g("cache_read_input_tokens"),
+    }
 }
 
 fn usage_total(v: &serde_json::Value) -> i64 {
@@ -36,6 +61,7 @@ pub fn parse_lines(
     utc_offset_secs: i64,
     totals: &mut TokenTotals,
     seen: &mut HashSet<String>,
+    per_model: &mut HashMap<String, ModelUse>,
 ) {
     let today_start = timeutil::local_day_start(now, utc_offset_secs);
     let week_start = now - 7 * 86_400;
@@ -78,7 +104,43 @@ pub fn parse_lines(
         if ts >= month_start {
             totals.month += n;
         }
+        if ts >= month_start {
+            let model = msg
+                .get("model")
+                .and_then(|m| m.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let parts = usage_parts(usage);
+            let entry = per_model.entry(model).or_default();
+            entry.month.input += parts.input;
+            entry.month.output += parts.output;
+            entry.month.cache_create += parts.cache_create;
+            entry.month.cache_read += parts.cache_read;
+            if ts >= today_start {
+                entry.today.input += parts.input;
+                entry.today.output += parts.output;
+                entry.today.cache_create += parts.cache_create;
+                entry.today.cache_read += parts.cache_read;
+            }
+        }
     }
+}
+
+/// Estimated cost (USD, public list prices) for the per-model totals.
+/// Returns (today, month, any_priced_model_seen).
+pub fn estimate(per_model: &HashMap<String, ModelUse>) -> (f64, f64, bool) {
+    let (mut today, mut month, mut priced) = (0.0, 0.0, false);
+    for (model, mu) in per_model {
+        if let Some(pr) = crate::pricing::price_for(model) {
+            priced = true;
+            let e = |u: &Use| {
+                crate::pricing::estimate_usd(u.input, u.cache_read, u.cache_create, u.output, &pr)
+            };
+            today += e(&mu.today);
+            month += e(&mu.month);
+        }
+    }
+    (today, month, priced)
 }
 
 /// Scan a Claude Code data directory and build the report.
@@ -95,9 +157,17 @@ pub fn collect(dir: &Path, now: i64) -> ProviderReport {
     }
     let mut totals = TokenTotals::default();
     let mut seen = HashSet::new();
+    let mut per_model: HashMap<String, ModelUse> = HashMap::new();
     let offset = timeutil::local_utc_offset_seconds();
     for f in super::jsonl_files(&projects) {
-        parse_lines(&super::read_lines(&f), now, offset, &mut totals, &mut seen);
+        parse_lines(
+            &super::read_lines(&f),
+            now,
+            offset,
+            &mut totals,
+            &mut seen,
+            &mut per_model,
+        );
     }
     let win = |label: &str, n: i64| UsageWindow {
         label: label.to_string(),
@@ -105,17 +175,32 @@ pub fn collect(dir: &Path, now: i64) -> ProviderReport {
         unit: "tokens".to_string(),
         ..Default::default()
     };
+    let (today_cost, month_cost, priced) = estimate(&per_model);
+    let mut today_win = win("Today", totals.today);
+    if priced && today_cost > 0.0 {
+        today_win.detail = format!("est. cost \u{2248} ${today_cost:.2} at list prices");
+    }
+    let mut windows = vec![
+        today_win,
+        win("Last 7 days", totals.week),
+        win("Last 30 days", totals.month),
+    ];
+    if priced {
+        windows.push(UsageWindow {
+            label: "Est. cost (30 days)".to_string(),
+            used: Some(month_cost),
+            unit: "USD".to_string(),
+            detail: "estimate at public list prices - a subscription bill differs".to_string(),
+            ..Default::default()
+        });
+    }
     ProviderReport {
         id: "claude-code".to_string(),
         name: "Claude Code".to_string(),
         ok: true,
         offline: false,
         error: None,
-        windows: vec![
-            win("Today", totals.today),
-            win("Last 7 days", totals.week),
-            win("Last 30 days", totals.month),
-        ],
+        windows,
         fetched_at: now,
     }
 }
@@ -128,7 +213,7 @@ mod tests {
 
     fn msg(id: &str, ts: &str, input: i64, output: i64) -> String {
         format!(
-            r#"{{"type":"assistant","timestamp":"{ts}","message":{{"id":"{id}","usage":{{"input_tokens":{input},"output_tokens":{output},"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}}}}"#
+            r#"{{"type":"assistant","timestamp":"{ts}","message":{{"id":"{id}","model":"claude-sonnet-4-5","usage":{{"input_tokens":{input},"output_tokens":{output},"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}}}}"#
         )
     }
 
@@ -144,7 +229,8 @@ mod tests {
             msg("a", &today, 100, 50), // duplicate copy of the same message
             msg("b", "2020-01-01T00:00:00Z", 999, 999), // far outside every window
         ];
-        parse_lines(&lines, NOW, 0, &mut totals, &mut seen);
+        let mut pm = HashMap::new();
+        parse_lines(&lines, NOW, 0, &mut totals, &mut seen, &mut pm);
         assert_eq!(totals.today, 150);
         assert_eq!(totals.week, 150);
         assert_eq!(totals.month, 150);

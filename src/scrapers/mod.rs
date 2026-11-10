@@ -2,11 +2,13 @@
 //! returns a `ProviderReport`, never panicking and never guessing — a source
 //! that cannot be read produces an honest error report instead of numbers.
 
+pub mod anthropic;
 pub mod claude_code;
 pub mod codex;
 pub mod deepseek;
 pub mod http;
 pub mod moonshot;
+pub mod openai;
 pub mod openrouter;
 
 use std::path::{Path, PathBuf};

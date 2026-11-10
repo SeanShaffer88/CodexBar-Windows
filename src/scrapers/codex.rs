@@ -8,8 +8,17 @@
 
 use crate::model::{ProviderReport, UsageWindow};
 use crate::timeutil;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
+
+/// Token mix for one model over the last 30 days (input includes the
+/// cached part, exactly as the Codex log reports it).
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct MonthUse {
+    pub input: i64,
+    pub cached: i64,
+    pub output: i64,
+}
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct CodexState {
@@ -19,12 +28,27 @@ pub struct CodexState {
     pub weekly_resets_at: Option<i64>,
     pub plan_type: Option<String>,
     pub total_tokens: Option<i64>,
+    /// Model named by the newest `turn_context` event.
+    pub current_model: Option<String>,
+    /// Per-model token sums over the last 30 days, from each event's
+    /// `last_token_usage` (the usage of that one request).
+    pub month_models: HashMap<String, MonthUse>,
 }
 
 /// Fold one session file's lines into `state`; later events overwrite
 /// earlier ones. `seen` dedupes by raw line across resumed/forked sessions.
-pub fn parse_lines(lines: &[String], state: &mut CodexState, seen: &mut HashSet<String>) {
+pub fn parse_lines(lines: &[String], state: &mut CodexState, seen: &mut HashSet<String>, now: i64) {
+    let month_start = now - 30 * 86_400;
     for line in lines {
+        if line.contains("\"turn_context\"") {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                let payload = v.get("payload").unwrap_or(&v);
+                if let Some(m) = payload.get("model").and_then(|x| x.as_str()) {
+                    state.current_model = Some(m.to_string());
+                }
+            }
+            continue;
+        }
         if !line.contains("\"token_count\"") {
             continue;
         }
@@ -45,6 +69,24 @@ pub fn parse_lines(lines: &[String], state: &mut CodexState, seen: &mut HashSet<
                 .and_then(|t| t.as_i64())
             {
                 state.total_tokens = Some(t);
+            }
+            let ts = v
+                .get("timestamp")
+                .and_then(|t| t.as_str())
+                .and_then(timeutil::parse_iso8601)
+                .unwrap_or(0);
+            if ts >= month_start {
+                if let Some(last) = info.get("last_token_usage") {
+                    let g = |k: &str| last.get(k).and_then(|x| x.as_i64()).unwrap_or(0);
+                    let model = state
+                        .current_model
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_string());
+                    let entry = state.month_models.entry(model).or_default();
+                    entry.input += g("input_tokens");
+                    entry.cached += g("cached_input_tokens");
+                    entry.output += g("output_tokens");
+                }
             }
         }
         if let Some(rl) = payload.get("rate_limits") {
@@ -78,7 +120,7 @@ pub fn collect(dir: &Path, now: i64) -> ProviderReport {
     let mut state = CodexState::default();
     let mut seen = HashSet::new();
     for f in super::jsonl_files(&sessions) {
-        parse_lines(&super::read_lines(&f), &mut state, &mut seen);
+        parse_lines(&super::read_lines(&f), &mut state, &mut seen, now);
     }
     if state.session_used_percent.is_none() && state.total_tokens.is_none() {
         return ProviderReport::failed(
@@ -105,6 +147,27 @@ pub fn collect(dir: &Path, now: i64) -> ProviderReport {
             used_percent: state.weekly_used_percent,
             resets_at: state.weekly_resets_at,
             unit: "tokens".to_string(),
+            ..Default::default()
+        });
+    }
+    let (month_cost, any_priced) = {
+        let mut cost = 0.0;
+        let mut priced = false;
+        for (model, mu) in &state.month_models {
+            if let Some(pr) = crate::pricing::price_for(model) {
+                priced = true;
+                let uncached = (mu.input - mu.cached).max(0);
+                cost += crate::pricing::estimate_usd(uncached, mu.cached, 0, mu.output, &pr);
+            }
+        }
+        (cost, priced)
+    };
+    if any_priced {
+        windows.push(UsageWindow {
+            label: "Est. cost (30 days)".to_string(),
+            used: Some(month_cost),
+            unit: "USD".to_string(),
+            detail: "API list-price estimate - Codex plans are subscription-based".to_string(),
             ..Default::default()
         });
     }
@@ -150,6 +213,7 @@ mod tests {
             &[line(10.0, 100, 500), line(42.0, 200, 900)],
             &mut st,
             &mut seen,
+            0,
         );
         assert_eq!(st.session_used_percent, Some(42.0));
         assert_eq!(st.session_resets_at, Some(200));
@@ -169,6 +233,7 @@ mod tests {
             ],
             &mut st,
             &mut seen,
+            0,
         );
         assert_eq!(st, CodexState::default());
     }
