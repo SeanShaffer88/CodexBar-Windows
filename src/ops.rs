@@ -74,10 +74,10 @@ fn collect_impl(cfg: &Config, data_dir: &Path, now: i64) -> (Vec<ProviderReport>
     std::thread::scope(|s| {
         let h_codex = p
             .codex
-            .then(|| s.spawn(|| codex::collect_with_breakdown(&codex_dir, now)));
-        let h_claude = p
-            .claude_code
-            .then(|| s.spawn(|| claude_code::collect_with_breakdown(&claude_dir, now)));
+            .then(|| s.spawn(|| codex::collect_with_breakdown(&codex_dir, Some(data_dir), now)));
+        let h_claude = p.claude_code.then(|| {
+            s.spawn(|| claude_code::collect_with_breakdown(&claude_dir, Some(data_dir), now))
+        });
         let h_gemini = p
             .gemini
             .then(|| s.spawn(|| gemini::collect(&gemini_dir, now)));

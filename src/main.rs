@@ -13,6 +13,7 @@ mod icon;
 mod model;
 mod ops;
 mod pricing;
+mod scancache;
 mod scrapers;
 mod secrets;
 mod settings;

@@ -44,28 +44,36 @@ fn usage_parts(v: &serde_json::Value) -> Use {
     }
 }
 
-fn usage_total(v: &serde_json::Value) -> i64 {
-    let g = |k: &str| v.get(k).and_then(|x| x.as_i64()).unwrap_or(0);
-    g("input_tokens")
-        + g("output_tokens")
-        + g("cache_creation_input_tokens")
-        + g("cache_read_input_tokens")
+/// What one assistant usage line contributes, pre-extracted so a
+/// scan can cache it per file (see `crate::scancache`) and replay
+/// it later instead of re-parsing the transcript. Field names are
+/// single letters to keep the cache file compact.
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, Debug)]
+pub struct MsgRecord {
+    /// Hash of the message id (None when the line carried none).
+    #[serde(rename = "i")]
+    pub id: Option<u64>,
+    /// Event time; None when the timestamp did not parse. Such a
+    /// line still claims its id in the dedupe set when parsed
+    /// directly, so the record keeps it claimable.
+    #[serde(rename = "t")]
+    pub ts: Option<i64>,
+    #[serde(rename = "m")]
+    pub model: String,
+    #[serde(rename = "n")]
+    pub input: i64,
+    #[serde(rename = "o")]
+    pub output: i64,
+    #[serde(rename = "c")]
+    pub cache_create: i64,
+    #[serde(rename = "r")]
+    pub cache_read: i64,
 }
 
-/// Fold one transcript file's lines into `totals`, relative to `now`.
-/// "Today" starts at local midnight (`utc_offset_secs` east of UTC);
-/// the 7/30-day windows are rolling.
-pub fn parse_lines(
-    text: &str,
-    now: i64,
-    utc_offset_secs: i64,
-    totals: &mut TokenTotals,
-    seen: &mut HashSet<u64>,
-    per_model: &mut HashMap<String, ModelUse>,
-) {
-    let today_start = timeutil::local_day_start(now, utc_offset_secs);
-    let week_start = now - 7 * 86_400;
-    let month_start = now - 30 * 86_400;
+/// Extract the usage records from one transcript file's text —
+/// the parsing half of `parse_lines`, with no aggregation state.
+pub fn extract(text: &str) -> Vec<MsgRecord> {
+    let mut out = Vec::new();
     for line in text.lines() {
         if !line.contains("\"usage\"") {
             continue;
@@ -82,19 +90,53 @@ pub fn parse_lines(
         let Some(usage) = msg.get("usage") else {
             continue;
         };
-        if let Some(id) = msg.get("id").and_then(|i| i.as_str()) {
-            if !seen.insert(super::str_hash(id)) {
+        let parts = usage_parts(usage);
+        out.push(MsgRecord {
+            id: msg.get("id").and_then(|i| i.as_str()).map(super::str_hash),
+            ts: v
+                .get("timestamp")
+                .and_then(|t| t.as_str())
+                .and_then(timeutil::parse_iso8601),
+            model: msg
+                .get("model")
+                .and_then(|m| m.as_str())
+                .unwrap_or("unknown")
+                .to_string(),
+            input: parts.input,
+            output: parts.output,
+            cache_create: parts.cache_create,
+            cache_read: parts.cache_read,
+        });
+    }
+    out
+}
+
+/// Fold extracted records into `totals`, relative to `now` —
+/// the aggregation half of `parse_lines`, and all a cached scan
+/// has to do. "Today" starts at local midnight
+/// (`utc_offset_secs` east of UTC); the 7/30-day windows are
+/// rolling, evaluated against the replay-time `now`.
+pub fn replay(
+    records: &[MsgRecord],
+    now: i64,
+    utc_offset_secs: i64,
+    totals: &mut TokenTotals,
+    seen: &mut HashSet<u64>,
+    per_model: &mut HashMap<String, ModelUse>,
+) {
+    let today_start = timeutil::local_day_start(now, utc_offset_secs);
+    let week_start = now - 7 * 86_400;
+    let month_start = now - 30 * 86_400;
+    for r in records {
+        if let Some(id) = r.id {
+            if !seen.insert(id) {
                 continue;
             }
         }
-        let Some(ts) = v
-            .get("timestamp")
-            .and_then(|t| t.as_str())
-            .and_then(timeutil::parse_iso8601)
-        else {
+        let Some(ts) = r.ts else {
             continue;
         };
-        let n = usage_total(usage);
+        let n = r.input + r.output + r.cache_create + r.cache_read;
         if ts >= today_start {
             totals.today += n;
         }
@@ -103,27 +145,39 @@ pub fn parse_lines(
         }
         if ts >= month_start {
             totals.month += n;
-        }
-        if ts >= month_start {
-            let model = msg
-                .get("model")
-                .and_then(|m| m.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            let parts = usage_parts(usage);
-            let entry = per_model.entry(model).or_default();
-            entry.month.input += parts.input;
-            entry.month.output += parts.output;
-            entry.month.cache_create += parts.cache_create;
-            entry.month.cache_read += parts.cache_read;
+            let entry = per_model.entry(r.model.clone()).or_default();
+            entry.month.input += r.input;
+            entry.month.output += r.output;
+            entry.month.cache_create += r.cache_create;
+            entry.month.cache_read += r.cache_read;
             if ts >= today_start {
-                entry.today.input += parts.input;
-                entry.today.output += parts.output;
-                entry.today.cache_create += parts.cache_create;
-                entry.today.cache_read += parts.cache_read;
+                entry.today.input += r.input;
+                entry.today.output += r.output;
+                entry.today.cache_create += r.cache_create;
+                entry.today.cache_read += r.cache_read;
             }
         }
     }
+}
+
+/// Fold one transcript file's text into `totals`: extract, then
+/// replay. Kept as the direct path for the uncached scans.
+pub fn parse_lines(
+    text: &str,
+    now: i64,
+    utc_offset_secs: i64,
+    totals: &mut TokenTotals,
+    seen: &mut HashSet<u64>,
+    per_model: &mut HashMap<String, ModelUse>,
+) {
+    replay(
+        &extract(text),
+        now,
+        utc_offset_secs,
+        totals,
+        seen,
+        per_model,
+    );
 }
 
 /// Estimated cost (USD, public list prices) for the per-model totals.
@@ -145,22 +199,10 @@ pub fn estimate(per_model: &HashMap<String, ModelUse>) -> (f64, f64, bool) {
 
 /// Per-model totals for the `breakdown` view, busiest model first.
 /// None when there is no projects folder at all.
-/// The one transcript scan: day/week/month totals plus the per-model
-/// month aggregates. `collect` and `model_breakdown` both read from
-/// this single pass — the detail window used to pay for the scan
-/// twice per open before the two were merged.
-///
-/// With a `cutoff`, files last modified before it are skipped. That
-/// loses nothing here: every number this scan produces covers at
-/// most the last 30 days, an entry's file is modified when the
-/// entry is appended (so in-window entries live in files modified
-/// inside the window), and a duplicated message counts once from
-/// whichever copy is read.
-fn scan_cutoff(
-    dir: &Path,
-    now: i64,
-    cutoff: Option<i64>,
-) -> Option<(TokenTotals, HashMap<String, ModelUse>)> {
+/// The uncached transcript scan (the `breakdown` command's path):
+/// day/week/month totals plus the per-model month aggregates in
+/// one pass over every file.
+fn scan(dir: &Path, now: i64) -> Option<(TokenTotals, HashMap<String, ModelUse>)> {
     let projects = dir.join("projects");
     if !projects.is_dir() {
         return None;
@@ -170,19 +212,101 @@ fn scan_cutoff(
     let mut per_model: HashMap<String, ModelUse> = HashMap::new();
     let offset = timeutil::local_utc_offset_seconds();
     for f in super::jsonl_files(&projects) {
-        if let Some(c) = cutoff {
-            if f.modified_secs() < c {
-                continue;
-            }
-        }
         let text = super::load_text(&f.path);
         parse_lines(&text, now, offset, &mut totals, &mut seen, &mut per_model);
     }
     Some((totals, per_model))
 }
 
-fn scan(dir: &Path, now: i64) -> Option<(TokenTotals, HashMap<String, ModelUse>)> {
-    scan_cutoff(dir, now, None)
+/// The refresh-path scan, with the modification-time gate and the
+/// per-file parse cache. The gate loses nothing: every number
+/// produced covers at most the last 30 days, an entry's file is
+/// modified when the entry is appended (so in-window entries live
+/// in files modified inside the window), and a duplicated message
+/// counts once from whichever copy is read. The cache loses
+/// nothing either: a file's records are replayed only when its
+/// modification time and size still match the stamp they were
+/// extracted under, and replay is the same aggregation the direct
+/// parse runs.
+fn scan_cached(
+    dir: &Path,
+    cache_dir: Option<&Path>,
+    now: i64,
+) -> Option<(TokenTotals, HashMap<String, ModelUse>)> {
+    let projects = dir.join("projects");
+    if !projects.is_dir() {
+        return None;
+    }
+    let cutoff = now - 31 * 86_400;
+    let mut totals = TokenTotals::default();
+    let mut seen = HashSet::new();
+    let mut per_model: HashMap<String, ModelUse> = HashMap::new();
+    let offset = timeutil::local_utc_offset_seconds();
+    let cache_file = cache_dir.map(|d| crate::scancache::cache_path(d, "scan-cache-claude.json"));
+    let mut cache = cache_file
+        .as_ref()
+        .map(|p| crate::scancache::load::<MsgRecord>(p))
+        .unwrap_or_default();
+    let mut dirty = false;
+    let mut alive: HashSet<String> = HashSet::new();
+    let mut total_records = 0usize;
+    for f in super::jsonl_files(&projects) {
+        if f.modified_secs() < cutoff {
+            continue;
+        }
+        let key = f.path.to_string_lossy().into_owned();
+        alive.insert(key.clone());
+        let is_hit = cache
+            .files
+            .get(&key)
+            .map(|e| e.mtime == f.modified_secs() && e.size == f.size)
+            .unwrap_or(false);
+        if is_hit {
+            let entry = cache.files.get(&key).expect("checked above");
+            total_records += entry.records.len();
+            replay(
+                &entry.records,
+                now,
+                offset,
+                &mut totals,
+                &mut seen,
+                &mut per_model,
+            );
+        } else {
+            let text = super::load_text(&f.path);
+            let records = extract(&text);
+            total_records += records.len();
+            replay(
+                &records,
+                now,
+                offset,
+                &mut totals,
+                &mut seen,
+                &mut per_model,
+            );
+            if cache_file.is_some() {
+                cache.files.insert(
+                    key,
+                    crate::scancache::FileEntry {
+                        mtime: f.modified_secs(),
+                        size: f.size,
+                        records,
+                    },
+                );
+                dirty = true;
+            }
+        }
+    }
+    if let Some(p) = &cache_file {
+        let pruned = cache.files.len() != alive.len();
+        if dirty || pruned {
+            cache.files.retain(|k, _| alive.contains(k));
+            if total_records <= crate::scancache::MAX_RECORDS {
+                crate::scancache::save(p, &cache);
+            }
+        }
+    }
+    Some((totals, per_model))
 }
 
 fn sorted_rows(per_model: HashMap<String, ModelUse>) -> Vec<(String, ModelUse)> {
@@ -253,13 +377,13 @@ fn no_projects(dir: &Path, now: i64) -> ProviderReport {
 
 /// One scan producing both the report and the per-model breakdown
 /// rows, for callers that need the two together (the detail window).
-/// The refresh path, so it takes the modification-time gate:
-/// files untouched for 31+ days cannot hold in-window entries.
+/// The refresh path: gated, and cached when `cache_dir` is given.
 pub fn collect_with_breakdown(
     dir: &Path,
+    cache_dir: Option<&Path>,
     now: i64,
 ) -> (ProviderReport, Option<Vec<(String, ModelUse)>>) {
-    match scan_cutoff(dir, now, Some(now - 31 * 86_400)) {
+    match scan_cached(dir, cache_dir, now) {
         None => (no_projects(dir, now), None),
         Some((totals, per_model)) => {
             let report = report_from(&totals, &per_model, now);
@@ -301,16 +425,17 @@ mod tests {
 
     #[test]
     fn cache_tokens_count() {
-        let v: serde_json::Value = serde_json::from_str(
-            r#"{"input_tokens":1,"output_tokens":2,"cache_creation_input_tokens":4,"cache_read_input_tokens":8}"#,
-        )
-        .unwrap();
-        assert_eq!(usage_total(&v), 15);
+        // Cache creation/read tokens are part of a message's total.
+        let line = r#"{"type":"assistant","timestamp":"2027-01-05T01:00:00Z","message":{"id":"x","model":"m","usage":{"input_tokens":1,"output_tokens":2,"cache_creation_input_tokens":4,"cache_read_input_tokens":8}}}"#;
+        let recs = extract(line);
+        assert_eq!(recs.len(), 1);
+        let r = &recs[0];
+        assert_eq!(r.input + r.output + r.cache_create + r.cache_read, 15);
     }
 
     #[test]
     fn missing_dir_is_honest_error() {
-        let (r, rows) = collect_with_breakdown(Path::new("/nonexistent-claude-dir"), NOW);
+        let (r, rows) = collect_with_breakdown(Path::new("/nonexistent-claude-dir"), None, NOW);
         assert!(!r.ok);
         assert!(rows.is_none());
     }
@@ -323,12 +448,64 @@ mod tests {
         let today =
             timeutil::format_utc(timeutil::day_start(NOW) + 3600).replace(' ', "T") + ":00Z";
         std::fs::write(projects.join("p.jsonl"), msg("a", &today, 100, 50)).unwrap();
-        let (totals, _) = scan_cutoff(&dir, NOW, None).unwrap();
-        assert_eq!(totals.today, 150);
-        // A cutoff past every real file's modification time gates
-        // the file out entirely.
-        let (totals, _) = scan_cutoff(&dir, NOW, Some(i64::MAX)).unwrap();
-        assert_eq!(totals.today, 0);
+        let month = |r: &ProviderReport| {
+            r.windows
+                .iter()
+                .find(|w| w.label == "Last 30 days")
+                .and_then(|w| w.used)
+        };
+        // Real now: the just-written file is inside the gate.
+        let (r, _) = collect_with_breakdown(&dir, None, timeutil::now_unix());
+        assert_eq!(month(&r), Some(150.0));
+        // A "now" far in the future: the file looks untouched for
+        // over 31 days, so the gate skips it entirely.
+        let (r, _) = collect_with_breakdown(&dir, None, 4_000_000_000);
+        assert_eq!(month(&r), Some(0.0));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cache_matches_direct_scan_and_repicks_changes() {
+        let base = std::env::temp_dir().join(format!("cbw-claude-cache-{}", std::process::id()));
+        let home = base.join("home");
+        let projects = home.join("projects");
+        std::fs::create_dir_all(&projects).unwrap();
+        let cache_dir = base.join("data");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        let today =
+            timeutil::format_utc(timeutil::day_start(NOW) + 3600).replace(' ', "T") + ":00Z";
+        let file = projects.join("p.jsonl");
+        std::fs::write(
+            &file,
+            format!("{}\n{}", msg("a", &today, 100, 50), msg("b", &today, 10, 5)),
+        )
+        .unwrap();
+        let month = |r: &ProviderReport| {
+            r.windows
+                .iter()
+                .find(|w| w.label == "Last 30 days")
+                .and_then(|w| w.used)
+        };
+        let now = timeutil::now_unix();
+        let (direct, _) = collect_with_breakdown(&home, None, now);
+        assert_eq!(month(&direct), Some(165.0));
+        // First cached run parses and populates; the second replays.
+        let (first, _) = collect_with_breakdown(&home, Some(&cache_dir), now);
+        assert_eq!(month(&first), Some(165.0));
+        assert!(cache_dir.join("scan-cache-claude.json").exists());
+        let (second, _) = collect_with_breakdown(&home, Some(&cache_dir), now);
+        assert_eq!(month(&second), Some(165.0));
+        // An append moves the stamp: the file re-parses, new total.
+        let mut text = std::fs::read_to_string(&file).unwrap();
+        text.push('\n');
+        text.push_str(&msg("c", &today, 1000, 0));
+        std::fs::write(&file, text).unwrap();
+        let (third, _) = collect_with_breakdown(&home, Some(&cache_dir), now);
+        assert_eq!(month(&third), Some(1165.0));
+        // A corrupt cache is ignored, never fatal or wrong.
+        std::fs::write(cache_dir.join("scan-cache-claude.json"), "{broken").unwrap();
+        let (fourth, _) = collect_with_breakdown(&home, Some(&cache_dir), now);
+        assert_eq!(month(&fourth), Some(1165.0));
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
