@@ -30,6 +30,18 @@ The tray warns you once when any usage window crosses 90%.
 When the network is down, the last known numbers stay on screen with an
 "offline" note instead of going blank.
 
+## Screenshots
+
+From a real run (v0.6.0):
+
+The usage detail window — one card per provider:
+
+![Usage detail window](docs/screenshots/usage-detail.png)
+
+The settings window — providers, keys, and general settings on one page:
+
+![Settings window](docs/screenshots/settings.png)
+
 ## Install
 
 Download from [GitHub Releases](https://github.com/SeanShaffer88/CodexBar-Windows/releases):
