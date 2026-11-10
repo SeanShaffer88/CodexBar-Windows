@@ -52,15 +52,27 @@ pub(crate) mod imp {
 
     pub fn run() -> i32 {
         unsafe {
-            // Single instance: a second launch just tells the user.
+            // Single instance: a second launch asks the running tray
+            // to show the usage detail window (v0.8.0) instead of just
+            // saying the program is already running.
             let mutex = CreateMutexW(std::ptr::null(), 1, wide("CodexBarWinMutex").as_ptr());
             if mutex.is_null() || GetLastError() == ERROR_ALREADY_EXISTS {
-                MessageBoxW(
+                let existing = FindWindowExW(
+                    HWND_MESSAGE,
                     std::ptr::null_mut(),
-                    wide("CodexBar-Windows is already running in the tray.").as_ptr(),
-                    wide("CodexBar-Windows").as_ptr(),
-                    MB_OK | MB_ICONINFORMATION,
+                    wide("CodexBarWinTray").as_ptr(),
+                    std::ptr::null(),
                 );
+                if !existing.is_null() {
+                    PostMessageW(existing, WM_OPEN_DETAILS, 0, 0);
+                } else {
+                    MessageBoxW(
+                        std::ptr::null_mut(),
+                        wide("CodexBar-Windows is already running in the tray.").as_ptr(),
+                        wide("CodexBar-Windows").as_ptr(),
+                        MB_OK | MB_ICONINFORMATION,
+                    );
+                }
                 return 0;
             }
             FreeConsole(); // tray mode: no console window lingers

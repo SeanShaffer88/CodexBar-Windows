@@ -26,7 +26,10 @@
 - Usage detail window: one card per provider with its headline number
   (percent, month cost, tokens, or credits), from the tray menu or the
   `details` command, with its own Refresh. It also opens on its own
-  when the program starts.
+  when the program starts — and starting the program again while it
+  runs brings the window up instead of an "already running" note.
+- Tokens-per-day chart in the detail window: the last 14 days from
+  the saved history, for the providers that keep a daily count.
 - `breakdown` command: per-model token totals and cost estimates for
   the local-log providers.
 - Per-Monitor v2 DPI awareness for crisp rendering on scaled displays.
