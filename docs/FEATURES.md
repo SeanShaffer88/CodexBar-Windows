@@ -13,6 +13,12 @@
 - Automatic refresh every 5–120 minutes (default 15), manual Refresh in
   the menu and by command.
 - Offline fallback to the last known numbers, labeled as such.
+- Organization usage for API accounts: OpenAI API and Anthropic API
+  providers report whole-organization tokens (today / 7 days) and
+  month-to-date cost from their documented Admin endpoints.
+- Cost estimates for Codex and Claude Code, priced per model at public
+  list prices and always labeled as estimates.
+- `report` command: day-by-day summary from the saved history.
 - History: every refresh is snapshotted to `data/history.json` (bounded
   to the newest 500) and can be listed or exported as JSON.
 - API keys encrypted with Windows DPAPI; never stored or logged in plain
