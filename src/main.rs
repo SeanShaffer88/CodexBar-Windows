@@ -11,6 +11,7 @@ mod model;
 mod ops;
 mod scrapers;
 mod secrets;
+mod settings;
 mod store;
 mod timeutil;
 mod tray;

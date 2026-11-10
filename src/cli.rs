@@ -27,6 +27,13 @@ Usage:
   codexbar-windows clear-key <openrouter|deepseek|moonshot>
                                    Remove the stored API key; turns the
                                    provider off
+  codexbar-windows settings        Open the settings window (Windows);
+                                   with options below, change settings
+                                   from the command line instead
+  codexbar-windows settings --refresh <minutes 5-120>
+  codexbar-windows settings --warn <percent 50-100>
+  codexbar-windows settings --autostart <on|off>
+  codexbar-windows settings --json Show settings as JSON
   codexbar-windows config          Show the settings file contents
   codexbar-windows config refresh <minutes>
                                    Set the tray refresh interval (5-120)
@@ -68,6 +75,7 @@ pub fn run(args: &[String]) -> i32 {
         "set-key" => set_key(&dir, args),
         "clear-key" => clear_key(&dir, args),
         "config" => config_cmd(&dir, args),
+        "settings" => settings_cmd(&dir, args),
         "data-dir" => {
             println!("{}", dir.display());
             0
@@ -264,6 +272,97 @@ fn clear_key(dir: &Path, args: &[String]) -> i32 {
         }
         Err(e) => fail(&e),
     }
+}
+
+fn argval(args: &[String], flag: &str) -> Option<String> {
+    args.windows(2).find(|w| w[0] == flag).map(|w| w[1].clone())
+}
+
+fn settings_cmd(dir: &Path, args: &[String]) -> i32 {
+    let json = args.iter().any(|a| a == "--json");
+    let refresh = argval(args, "--refresh");
+    let warn = argval(args, "--warn");
+    let autostart = argval(args, "--autostart");
+    let has_setters = refresh.is_some() || warn.is_some() || autostart.is_some();
+    if !has_setters && !json {
+        // No options: the settings window. Off Windows, print instead.
+        #[cfg(windows)]
+        {
+            return crate::settings::open(None);
+        }
+        #[cfg(not(windows))]
+        {
+            return show_settings(dir, false);
+        }
+    }
+    if has_setters {
+        let mut cfg = load_cfg(dir);
+        if let Some(v) = &refresh {
+            match v.parse::<u32>() {
+                Ok(n) if (5..=120).contains(&n) => cfg.refresh_minutes = n,
+                _ => return fail("Usage: settings --refresh <minutes 5-120>"),
+            }
+        }
+        if let Some(v) = &warn {
+            match v.parse::<u32>() {
+                Ok(n) if (50..=100).contains(&n) => cfg.warn_threshold_percent = n,
+                _ => return fail("Usage: settings --warn <percent 50-100>"),
+            }
+        }
+        if let Some(v) = &autostart {
+            let on = match v.as_str() {
+                "on" => true,
+                "off" => false,
+                _ => return fail("Usage: settings --autostart <on|off>"),
+            };
+            if let Err(e) = ops::set_autostart(on) {
+                return fail(&e);
+            }
+            cfg.start_with_windows = on;
+        }
+        if let Err(e) = config::save(dir, &cfg) {
+            return fail(&e);
+        }
+        println!("Settings saved. A running tray picks changes up on its next refresh, except the interval, which applies when the tray restarts or saves from its Settings window.");
+    }
+    show_settings(dir, json)
+}
+
+fn show_settings(dir: &Path, json: bool) -> i32 {
+    let cfg = load_cfg(dir);
+    if json {
+        let key = |p: &str| secrets::get_key(dir, p).is_some();
+        let v = serde_json::json!({
+            "refresh_minutes": cfg.refresh_minutes,
+            "warn_threshold_percent": cfg.warn_threshold_percent,
+            "start_with_windows_configured": cfg.start_with_windows,
+            "start_with_windows_active": ops::autostart_enabled(),
+            "data_dir": dir.to_string_lossy(),
+            "providers": {
+                "codex": { "on": cfg.providers.codex, "key": "local logs" },
+                "claude-code": { "on": cfg.providers.claude_code, "key": "local logs" },
+                "openrouter": { "on": cfg.providers.openrouter, "key_stored": key("openrouter") },
+                "deepseek": { "on": cfg.providers.deepseek, "key_stored": key("deepseek") },
+                "moonshot": { "on": cfg.providers.moonshot, "key_stored": key("moonshot") },
+            }
+        });
+        println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+        return 0;
+    }
+    println!("Refresh every:        {} minutes", cfg.refresh_minutes);
+    println!("Warn at:              {}% used", cfg.warn_threshold_percent);
+    println!(
+        "Start with Windows:   {} (entry currently {})",
+        if cfg.start_with_windows { "on" } else { "off" },
+        if ops::autostart_enabled() {
+            "present"
+        } else {
+            "absent"
+        }
+    );
+    println!("Data folder:          {}", dir.display());
+    println!();
+    providers_cmd(dir)
 }
 
 fn config_cmd(dir: &Path, args: &[String]) -> i32 {

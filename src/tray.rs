@@ -15,7 +15,7 @@ pub fn run() -> i32 {
 }
 
 #[cfg(windows)]
-mod imp {
+pub(crate) mod imp {
     use crate::model::ProviderReport;
     use crate::{config, ops, timeutil};
     use std::path::PathBuf;
@@ -30,7 +30,9 @@ mod imp {
 
     const WM_TRAY: u32 = WM_APP + 2;
     const WM_READY: u32 = WM_APP + 1;
+    pub(crate) const WM_SETTINGS_SAVED: u32 = WM_APP + 7;
     const TIMER_ID: usize = 1;
+    const ID_SETTINGS: usize = 1005;
     const ID_REFRESH: usize = 1001;
     const ID_FOLDER: usize = 1002;
     const ID_HELP: usize = 1003;
@@ -40,6 +42,7 @@ mod imp {
     static PREV_WORST: Mutex<Option<f64>> = Mutex::new(None);
     static DATA_DIR: Mutex<PathBuf> = Mutex::new(PathBuf::new());
     static REFRESH_MIN: Mutex<u32> = Mutex::new(15);
+    static WARN_PCT: Mutex<u32> = Mutex::new(90);
 
     fn wide(s: &str) -> Vec<u16> {
         s.encode_utf16().chain(std::iter::once(0)).collect()
@@ -64,6 +67,7 @@ mod imp {
             let (cfg, _) = config::load(&dir);
             *DATA_DIR.lock().unwrap() = dir.clone();
             *REFRESH_MIN.lock().unwrap() = cfg.refresh_minutes;
+            *WARN_PCT.lock().unwrap() = cfg.warn_threshold_percent;
 
             let hinst = GetModuleHandleW(std::ptr::null());
             let class_name = wide("CodexBarWinTray");
@@ -267,7 +271,8 @@ mod imp {
                 };
                 if let Some((name, label, pct)) = worst {
                     let mut prev = PREV_WORST.lock().unwrap();
-                    if crate::ops::crossed_threshold(*prev, Some(pct), 90.0) {
+                    let threshold = *WARN_PCT.lock().unwrap() as f64;
+                    if crate::ops::crossed_threshold(*prev, Some(pct), threshold) {
                         show_balloon(
                             hwnd,
                             "CodexBar-Windows — limit warning",
@@ -278,8 +283,20 @@ mod imp {
                 }
                 0
             }
+            WM_SETTINGS_SAVED => {
+                let dir = DATA_DIR.lock().unwrap().clone();
+                let (cfg, _) = config::load(&dir);
+                *REFRESH_MIN.lock().unwrap() = cfg.refresh_minutes;
+                *WARN_PCT.lock().unwrap() = cfg.warn_threshold_percent;
+                KillTimer(hwnd, TIMER_ID);
+                SetTimer(hwnd, TIMER_ID, cfg.refresh_minutes * 60_000, None);
+                spawn_refresh(hwnd);
+                0
+            }
             WM_TRAY => {
-                if lp as u32 == WM_LBUTTONUP || lp as u32 == WM_RBUTTONUP {
+                if lp as u32 == WM_LBUTTONDBLCLK {
+                    crate::settings::open(Some(hwnd));
+                } else if lp as u32 == WM_LBUTTONUP || lp as u32 == WM_RBUTTONUP {
                     show_menu(hwnd);
                 }
                 0
@@ -324,6 +341,7 @@ mod imp {
         }
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
         AppendMenuW(menu, MF_STRING, ID_REFRESH, wide("Refresh now").as_ptr());
+        AppendMenuW(menu, MF_STRING, ID_SETTINGS, wide("Settings…").as_ptr());
         AppendMenuW(
             menu,
             MF_STRING,
@@ -348,6 +366,9 @@ mod imp {
         );
         DestroyMenu(menu);
         match cmd as usize {
+            ID_SETTINGS => {
+                crate::settings::open(Some(hwnd));
+            }
             ID_REFRESH => spawn_refresh(hwnd),
             ID_FOLDER => {
                 let dir = DATA_DIR.lock().unwrap().clone();
