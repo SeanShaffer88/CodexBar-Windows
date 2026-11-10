@@ -145,7 +145,11 @@ pub fn estimate(per_model: &HashMap<String, ModelUse>) -> (f64, f64, bool) {
 
 /// Per-model totals for the `breakdown` view, busiest model first.
 /// None when there is no projects folder at all.
-pub fn model_breakdown(dir: &Path, now: i64) -> Option<Vec<(String, ModelUse)>> {
+/// The one transcript scan: day/week/month totals plus the per-model
+/// month aggregates. `collect` and `model_breakdown` both read from
+/// this single pass — the detail window used to pay for the scan
+/// twice per open before the two were merged.
+fn scan(dir: &Path, now: i64) -> Option<(TokenTotals, HashMap<String, ModelUse>)> {
     let projects = dir.join("projects");
     if !projects.is_dir() {
         return None;
@@ -164,45 +168,33 @@ pub fn model_breakdown(dir: &Path, now: i64) -> Option<Vec<(String, ModelUse)>> 
             &mut per_model,
         );
     }
+    Some((totals, per_model))
+}
+
+fn sorted_rows(per_model: HashMap<String, ModelUse>) -> Vec<(String, ModelUse)> {
     let total = |u: &Use| u.input + u.output + u.cache_create + u.cache_read;
     let mut rows: Vec<(String, ModelUse)> = per_model.into_iter().collect();
     rows.sort_by_key(|(_, mu)| -total(&mu.month));
-    Some(rows)
+    rows
+}
+
+pub fn model_breakdown(dir: &Path, now: i64) -> Option<Vec<(String, ModelUse)>> {
+    scan(dir, now).map(|(_, per_model)| sorted_rows(per_model))
 }
 
 /// Scan a Claude Code data directory and build the report.
-pub fn collect(dir: &Path, now: i64) -> ProviderReport {
-    let projects = dir.join("projects");
-    if !projects.is_dir() {
-        return ProviderReport::failed(
-            "claude-code",
-            "Claude Code",
-            now,
-            format!("no Claude Code projects found at {}", projects.display()),
-            false,
-        );
-    }
-    let mut totals = TokenTotals::default();
-    let mut seen = HashSet::new();
-    let mut per_model: HashMap<String, ModelUse> = HashMap::new();
-    let offset = timeutil::local_utc_offset_seconds();
-    for f in super::jsonl_files(&projects) {
-        parse_lines(
-            &super::read_lines(&f),
-            now,
-            offset,
-            &mut totals,
-            &mut seen,
-            &mut per_model,
-        );
-    }
+fn report_from(
+    totals: &TokenTotals,
+    per_model: &HashMap<String, ModelUse>,
+    now: i64,
+) -> ProviderReport {
     let win = |label: &str, n: i64| UsageWindow {
         label: label.to_string(),
         used: Some(n as f64),
         unit: "tokens".to_string(),
         ..Default::default()
     };
-    let (today_cost, month_cost, priced) = estimate(&per_model);
+    let (today_cost, month_cost, priced) = estimate(per_model);
     let mut today_win = win("Today", totals.today);
     if priced && today_cost > 0.0 {
         today_win.detail = format!("est. cost \u{2248} ${today_cost:.2} at list prices");
@@ -229,6 +221,34 @@ pub fn collect(dir: &Path, now: i64) -> ProviderReport {
         error: None,
         windows,
         fetched_at: now,
+    }
+}
+
+fn no_projects(dir: &Path, now: i64) -> ProviderReport {
+    ProviderReport::failed(
+        "claude-code",
+        "Claude Code",
+        now,
+        format!(
+            "no Claude Code projects found at {}",
+            dir.join("projects").display()
+        ),
+        false,
+    )
+}
+
+/// One scan producing both the report and the per-model breakdown
+/// rows, for callers that need the two together (the detail window).
+pub fn collect_with_breakdown(
+    dir: &Path,
+    now: i64,
+) -> (ProviderReport, Option<Vec<(String, ModelUse)>>) {
+    match scan(dir, now) {
+        None => (no_projects(dir, now), None),
+        Some((totals, per_model)) => {
+            let report = report_from(&totals, &per_model, now);
+            (report, Some(sorted_rows(per_model)))
+        }
     }
 }
 
@@ -274,7 +294,8 @@ mod tests {
 
     #[test]
     fn missing_dir_is_honest_error() {
-        let r = collect(Path::new("/nonexistent-claude-dir"), NOW);
+        let (r, rows) = collect_with_breakdown(Path::new("/nonexistent-claude-dir"), NOW);
         assert!(!r.ok);
+        assert!(rows.is_none());
     }
 }

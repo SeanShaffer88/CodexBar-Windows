@@ -105,9 +105,10 @@ pub fn parse_lines(lines: &[String], state: &mut CodexState, seen: &mut HashSet<
     }
 }
 
-/// Per-model last-30-days totals for the `breakdown` view, busiest
-/// model first. None when there is no sessions folder at all.
-pub fn model_breakdown(dir: &Path, now: i64) -> Option<Vec<(String, MonthUse)>> {
+/// The one session-log scan. `collect` and `model_breakdown` both
+/// read from this single pass — the detail window used to pay for
+/// the scan twice per open before the two were merged.
+fn scan(dir: &Path, now: i64) -> Option<CodexState> {
     let sessions = dir.join("sessions");
     if !sessions.is_dir() {
         return None;
@@ -117,28 +118,35 @@ pub fn model_breakdown(dir: &Path, now: i64) -> Option<Vec<(String, MonthUse)>> 
     for f in super::jsonl_files(&sessions) {
         parse_lines(&super::read_lines(&f), &mut state, &mut seen, now);
     }
-    let mut rows: Vec<(String, MonthUse)> = state.month_models.into_iter().collect();
-    rows.sort_by_key(|(_, mu)| -(mu.input + mu.output));
-    Some(rows)
+    Some(state)
 }
 
-/// Scan a Codex data directory and build the report.
-pub fn collect(dir: &Path, now: i64) -> ProviderReport {
-    let sessions = dir.join("sessions");
-    if !sessions.is_dir() {
-        return ProviderReport::failed(
-            "codex",
-            "Codex",
-            now,
-            format!("no Codex sessions found at {}", sessions.display()),
-            false,
-        );
-    }
-    let mut state = CodexState::default();
-    let mut seen = HashSet::new();
-    for f in super::jsonl_files(&sessions) {
-        parse_lines(&super::read_lines(&f), &mut state, &mut seen, now);
-    }
+fn sorted_rows(state: CodexState) -> Vec<(String, MonthUse)> {
+    let mut rows: Vec<(String, MonthUse)> = state.month_models.into_iter().collect();
+    rows.sort_by_key(|(_, mu)| -(mu.input + mu.output));
+    rows
+}
+
+/// Per-model last-30-days totals for the `breakdown` view, busiest
+/// model first. None when there is no sessions folder at all.
+pub fn model_breakdown(dir: &Path, now: i64) -> Option<Vec<(String, MonthUse)>> {
+    scan(dir, now).map(sorted_rows)
+}
+
+fn no_sessions(dir: &Path, now: i64) -> ProviderReport {
+    ProviderReport::failed(
+        "codex",
+        "Codex",
+        now,
+        format!(
+            "no Codex sessions found at {}",
+            dir.join("sessions").display()
+        ),
+        false,
+    )
+}
+
+fn report_from(state: &CodexState, now: i64) -> ProviderReport {
     if state.session_used_percent.is_none() && state.total_tokens.is_none() {
         return ProviderReport::failed(
             "codex",
@@ -212,6 +220,21 @@ pub fn collect(dir: &Path, now: i64) -> ProviderReport {
     }
 }
 
+/// One scan producing both the report and the per-model breakdown
+/// rows, for callers that need the two together (the detail window).
+pub fn collect_with_breakdown(
+    dir: &Path,
+    now: i64,
+) -> (ProviderReport, Option<Vec<(String, MonthUse)>>) {
+    match scan(dir, now) {
+        None => (no_sessions(dir, now), None),
+        Some(state) => {
+            let report = report_from(&state, now);
+            (report, Some(sorted_rows(state)))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,8 +280,9 @@ mod tests {
 
     #[test]
     fn missing_dir_is_honest_error() {
-        let r = collect(Path::new("/nonexistent-codex-dir"), 0);
+        let (r, rows) = collect_with_breakdown(Path::new("/nonexistent-codex-dir"), 0);
         assert!(!r.ok);
         assert!(r.error.unwrap().contains("no Codex sessions"));
+        assert!(rows.is_none());
     }
 }
