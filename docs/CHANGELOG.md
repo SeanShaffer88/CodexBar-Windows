@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.9.1 — 2026-11-10
+
+### Fixed
+- The application icon is embedded in the release build again. In
+  v0.9.0 the Microsoft resource compiler rejected the resource
+  script the build generates (it named the icon with an unescaped
+  single-backslash path) and the build carried on with only a
+  warning, so the shipped program had no icon. The path is now
+  escaped, the compiler's own error text is captured in the build
+  log when it fails, and the CI and release pipelines verify every
+  icon image is inside the built program and fail if any is
+  missing.
+
 ## v0.9.0 — 2026-11-10
 
 ### Added
