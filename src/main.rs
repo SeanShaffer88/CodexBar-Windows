@@ -9,6 +9,7 @@ mod cli;
 mod config;
 mod model;
 mod ops;
+mod pricing;
 mod scrapers;
 mod secrets;
 mod settings;

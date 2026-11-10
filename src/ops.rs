@@ -3,7 +3,7 @@
 
 use crate::config::Config;
 use crate::model::ProviderReport;
-use crate::scrapers::{claude_code, codex, deepseek, moonshot, openrouter};
+use crate::scrapers::{anthropic, claude_code, codex, deepseek, moonshot, openai, openrouter};
 use crate::store;
 use std::path::{Path, PathBuf};
 
@@ -39,6 +39,12 @@ pub fn collect_all(cfg: &Config, data_dir: &Path, now: i64) -> Vec<ProviderRepor
     }
     if cfg.providers.moonshot {
         out.push(moonshot::collect(data_dir, now));
+    }
+    if cfg.providers.openai {
+        out.push(openai::collect(data_dir, now));
+    }
+    if cfg.providers.anthropic {
+        out.push(anthropic::collect(data_dir, now));
     }
     // Offline fallback: swap in the last cached windows for network failures.
     let cached = store::latest(data_dir);
