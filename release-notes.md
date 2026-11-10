@@ -1,19 +1,20 @@
-# CodexBar-Windows v0.9.5
+# CodexBar-Windows v0.10.0
 
-## Changed
+## Added
 
-- Providers now collect in parallel instead of one after
-  another, so a refresh takes about as long as its slowest
-  provider rather than the sum of all of them — the difference
-  shows most on a slow network, where each provider's connect
-  and read timeouts used to add up. Reports still arrive in
-  the same fixed order. The detail window also reads its saved
-  history once per open instead of twice.
+- A per-file parse cache for the local log scans
+  (`scan-cache-claude.json` and `scan-cache-codex.json` in the
+  data folder). Each log file's extracted records are stored
+  once and replayed on later refreshes; only files that changed
+  since the last scan are read again. Refreshes over a large
+  history no longer re-parse a month of logs every time. The
+  numbers are unchanged, and a missing or damaged cache file is
+  simply rebuilt.
 
 ## Install
 
-- `CodexBar-Windows-v0.9.5-x64-Setup.exe` — installer
-- `CodexBar-Windows-v0.9.5-x64-Portable.zip` — unzip anywhere and run
+- `CodexBar-Windows-v0.10.0-x64-Setup.exe` — installer
+- `CodexBar-Windows-v0.10.0-x64-Portable.zip` — unzip anywhere and run
 - `SHA256SUMS.txt` — checksums for both
 
 Binaries are unsigned (no code-signing certificate); Windows SmartScreen
