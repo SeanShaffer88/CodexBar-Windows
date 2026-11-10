@@ -28,13 +28,16 @@ fn usage_total(v: &serde_json::Value) -> i64 {
 }
 
 /// Fold one transcript file's lines into `totals`, relative to `now`.
+/// "Today" starts at local midnight (`utc_offset_secs` east of UTC);
+/// the 7/30-day windows are rolling.
 pub fn parse_lines(
     lines: &[String],
     now: i64,
+    utc_offset_secs: i64,
     totals: &mut TokenTotals,
     seen: &mut HashSet<String>,
 ) {
-    let today_start = timeutil::day_start(now);
+    let today_start = timeutil::local_day_start(now, utc_offset_secs);
     let week_start = now - 7 * 86_400;
     let month_start = now - 30 * 86_400;
     for line in lines {
@@ -92,8 +95,9 @@ pub fn collect(dir: &Path, now: i64) -> ProviderReport {
     }
     let mut totals = TokenTotals::default();
     let mut seen = HashSet::new();
+    let offset = timeutil::local_utc_offset_seconds();
     for f in super::jsonl_files(&projects) {
-        parse_lines(&super::read_lines(&f), now, &mut totals, &mut seen);
+        parse_lines(&super::read_lines(&f), now, offset, &mut totals, &mut seen);
     }
     let win = |label: &str, n: i64| UsageWindow {
         label: label.to_string(),
@@ -140,7 +144,7 @@ mod tests {
             msg("a", &today, 100, 50), // duplicate copy of the same message
             msg("b", "2020-01-01T00:00:00Z", 999, 999), // far outside every window
         ];
-        parse_lines(&lines, NOW, &mut totals, &mut seen);
+        parse_lines(&lines, NOW, 0, &mut totals, &mut seen);
         assert_eq!(totals.today, 150);
         assert_eq!(totals.week, 150);
         assert_eq!(totals.month, 150);
