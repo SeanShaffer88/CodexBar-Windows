@@ -51,7 +51,10 @@ pub fn card_for(r: &ProviderReport, now: i64) -> Card {
         return Card {
             label,
             big: "\u{2014}".to_string(),
-            sub: short(r.error.as_deref().unwrap_or("no data"), 56),
+            // An error card's whole content is its sentence — the
+            // cap fits the full guidance (the sign-in and set-key
+            // sentences run ~75 chars), wrapped over two lines.
+            sub: short(r.error.as_deref().unwrap_or("no data"), 84),
             foot: String::new(),
             bar: None,
         };
@@ -319,6 +322,20 @@ mod tests {
         assert_eq!(c.big, "\u{2014}");
         assert!(c.sub.contains("no Admin API key"));
     }
+
+    #[test]
+    fn long_error_text_is_not_cut_mid_sentence() {
+        let mut r = report(vec![]);
+        r.ok = false;
+        r.error = Some(
+            "Gemini CLI is not signed in on this PC \u{2014} run `gemini` once to sign in".into(),
+        );
+        let c = card_for(&r, 0);
+        assert_eq!(
+            c.sub,
+            "Gemini CLI is not signed in on this PC \u{2014} run `gemini` once to sign in"
+        );
+    }
 }
 
 #[cfg(windows)]
@@ -496,6 +513,22 @@ mod imp {
         });
     }
 
+    /// The frame's size beyond the client area (borders + caption),
+    /// measured from the window itself — exact at any DPI. The
+    /// layout is all client-area math, so the window is sized to
+    /// client + frame; before, the frame came OUT of the layout
+    /// height and the content's bottom was cut off.
+    unsafe fn frame_extra(hwnd: HWND) -> (i32, i32) {
+        let mut wr: RECT = std::mem::zeroed();
+        let mut cr: RECT = std::mem::zeroed();
+        GetWindowRect(hwnd, &mut wr);
+        GetClientRect(hwnd, &mut cr);
+        (
+            (wr.right - wr.left) - (cr.right - cr.left),
+            (wr.bottom - wr.top) - (cr.bottom - cr.top),
+        )
+    }
+
     /// Resize the window (and move its buttons) when the content's
     /// height differs from the height it was last sized to.
     unsafe fn apply_height(hwnd: HWND, st: &mut State) {
@@ -504,13 +537,14 @@ mod imp {
             return;
         }
         st.height = h;
+        let (fw, fh) = frame_extra(hwnd);
         SetWindowPos(
             hwnd,
             std::ptr::null_mut(),
             0,
             0,
-            680,
-            h,
+            680 + fw,
+            h + fh,
             SWP_NOMOVE | SWP_NOZORDER,
         );
         for (id, x) in [(ID_REFRESH, 432), (ID_CLOSE, 542)] {
@@ -959,6 +993,19 @@ mod imp {
                     100,
                     30,
                     ID_CLOSE,
+                );
+                // The creation size was the layout (client) size;
+                // grow the window by the real frame so the client
+                // area is exactly what the layout expects.
+                let (fw, fh) = frame_extra(hwnd);
+                SetWindowPos(
+                    hwnd,
+                    std::ptr::null_mut(),
+                    0,
+                    0,
+                    680 + fw,
+                    height + fh,
+                    SWP_NOMOVE | SWP_NOZORDER,
                 );
                 let pending = if st.loading {
                     Some(if st.load_full {
