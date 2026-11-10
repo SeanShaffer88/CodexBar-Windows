@@ -22,6 +22,10 @@ store encrypted on your machine.
   store account limit percentages locally, so none are invented.)
 - **OpenRouter** — credit usage and remaining balance for your API key,
   from OpenRouter's `auth/key` endpoint.
+- **DeepSeek** — account balances (total, granted, topped-up) for your
+  API key, from DeepSeek's balance endpoint.
+
+The tray warns you once when any usage window crosses 90%.
 
 When the network is down, the last known numbers stay on screen with an
 "offline" note instead of going blank.
