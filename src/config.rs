@@ -1,14 +1,16 @@
 //! Configuration and portable storage layout.
 //!
 //! Everything the program writes lives in a `data/` directory beside the
-//! executable, so the whole app is portable and never touches the registry.
+//! executable, so the whole app is portable. The one registry touch is
+//! opt-in: turning on "start with Windows" writes the standard per-user
+//! Run entry, and turning it off removes it.
 //! `config.json` carries a `schema_version`; older files are migrated upward
 //! field by field and the original is backed up before any rewrite.
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Providers {
@@ -50,6 +52,12 @@ pub struct Config {
     pub refresh_minutes: u32,
     #[serde(default)]
     pub providers: Providers,
+    /// Tray warning balloon threshold, percent used (50-100). Schema 2.
+    #[serde(default = "default_warn")]
+    pub warn_threshold_percent: u32,
+    /// Start the tray app when Windows starts (per-user Run entry). Schema 2.
+    #[serde(default)]
+    pub start_with_windows: bool,
     /// Optional override for the Claude Code data directory
     /// (defaults to `~/.claude`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -63,11 +71,17 @@ fn default_refresh() -> u32 {
     15
 }
 
+fn default_warn() -> u32 {
+    90
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
             schema_version: SCHEMA_VERSION,
             refresh_minutes: default_refresh(),
+            warn_threshold_percent: default_warn(),
+            start_with_windows: false,
             providers: Providers::default(),
             claude_dir: None,
             codex_dir: None,
@@ -89,6 +103,7 @@ impl Config {
         }
         self.schema_version = SCHEMA_VERSION;
         self.refresh_minutes = self.refresh_minutes.clamp(5, 120);
+        self.warn_threshold_percent = self.warn_threshold_percent.clamp(50, 100);
         Ok(self)
     }
 }
@@ -190,6 +205,17 @@ mod tests {
         assert_eq!(m.schema_version, SCHEMA_VERSION);
         assert_eq!(m.refresh_minutes, 120);
         assert!(m.providers.claude_code);
+    }
+
+    #[test]
+    fn migrate_v1_gains_schema2_fields() {
+        let c: Config =
+            serde_json::from_str(r#"{"schema_version":1,"refresh_minutes":20}"#).unwrap();
+        let m = c.migrate().unwrap();
+        assert_eq!(m.schema_version, 2);
+        assert_eq!(m.refresh_minutes, 20);
+        assert_eq!(m.warn_threshold_percent, 90);
+        assert!(!m.start_with_windows);
     }
 
     #[test]

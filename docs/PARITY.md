@@ -16,7 +16,7 @@ implemented and verified here.
 | 100+ providers (Cursor, Gemini, Copilot, Groq, ...) | 5 sources | Not yet — providers are added only where a real, readable data source exists |
 | Browser-cookie / OAuth session reuse | — | Not planned for v0.x; local files and API keys only |
 | Per-provider tray icons / merge mode | Single icon showing the worst window | Partial |
-| Settings window | Settings are file + CLI in v0.1.0 | Planned |
+| Settings window | Dark single-page window (tray menu, tray double-click, or `settings` command): provider switches, key management, refresh interval, warning threshold, start-with-Windows | Implemented (v0.4.0) |
 
 ## Known limitations
 

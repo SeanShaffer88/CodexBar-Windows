@@ -120,6 +120,119 @@ pub fn render_text(reports: &[ProviderReport], now: i64) -> String {
     s
 }
 
+/// Whether the per-user "start with Windows" Run entry exists.
+/// Always false off Windows.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn autostart_enabled() -> bool {
+    #[cfg(windows)]
+    {
+        imp::autostart_enabled()
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+/// Create or remove the per-user Run entry. Windows only; anywhere else
+/// this is an honest error so callers never claim a state that is not real.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn set_autostart(on: bool) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        imp::set_autostart(on)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = on;
+        Err("Start with Windows can only be changed on Windows.".to_string())
+    }
+}
+
+#[cfg(windows)]
+mod imp {
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    use windows_sys::Win32::System::Registry::*;
+
+    const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+    const VALUE_NAME: &str = "CodexBar-Windows";
+
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    fn open_key(access: u32) -> Result<HKEY, String> {
+        let mut key: HKEY = std::ptr::null_mut();
+        let rc = unsafe {
+            RegCreateKeyExW(
+                HKEY_CURRENT_USER,
+                wide(RUN_KEY).as_ptr(),
+                0,
+                std::ptr::null_mut(),
+                REG_OPTION_NON_VOLATILE,
+                access,
+                std::ptr::null(),
+                &mut key,
+                std::ptr::null_mut(),
+            )
+        };
+        if rc == ERROR_SUCCESS {
+            Ok(key)
+        } else {
+            Err(format!("cannot open the startup registry key (error {rc})"))
+        }
+    }
+
+    pub fn autostart_enabled() -> bool {
+        let Ok(key) = open_key(KEY_QUERY_VALUE) else {
+            return false;
+        };
+        let mut ty: u32 = 0;
+        let rc = unsafe {
+            RegQueryValueExW(
+                key,
+                wide(VALUE_NAME).as_ptr(),
+                std::ptr::null_mut(),
+                &mut ty,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        unsafe { RegCloseKey(key) };
+        rc == ERROR_SUCCESS
+    }
+
+    pub fn set_autostart(on: bool) -> Result<(), String> {
+        let key = open_key(KEY_SET_VALUE)?;
+        let rc = if on {
+            let exe = std::env::current_exe()
+                .map_err(|e| format!("cannot find the program path: {e}"))?;
+            let val = wide(&format!("\"{}\"", exe.to_string_lossy()));
+            unsafe {
+                RegSetValueExW(
+                    key,
+                    wide(VALUE_NAME).as_ptr(),
+                    0,
+                    REG_SZ,
+                    val.as_ptr() as *const u8,
+                    (val.len() * 2) as u32,
+                )
+            }
+        } else {
+            unsafe { RegDeleteValueW(key, wide(VALUE_NAME).as_ptr()) }
+        };
+        unsafe { RegCloseKey(key) };
+        // Deleting an entry that is not there is success for "off".
+        if rc == ERROR_SUCCESS || (!on && rc == 2) {
+            Ok(())
+        } else {
+            Err(format!(
+                "cannot update the startup registry entry (error {rc})"
+            ))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
