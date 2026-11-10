@@ -105,6 +105,23 @@ pub fn parse_lines(lines: &[String], state: &mut CodexState, seen: &mut HashSet<
     }
 }
 
+/// Per-model last-30-days totals for the `breakdown` view, busiest
+/// model first. None when there is no sessions folder at all.
+pub fn model_breakdown(dir: &Path, now: i64) -> Option<Vec<(String, MonthUse)>> {
+    let sessions = dir.join("sessions");
+    if !sessions.is_dir() {
+        return None;
+    }
+    let mut state = CodexState::default();
+    let mut seen = HashSet::new();
+    for f in super::jsonl_files(&sessions) {
+        parse_lines(&super::read_lines(&f), &mut state, &mut seen, now);
+    }
+    let mut rows: Vec<(String, MonthUse)> = state.month_models.into_iter().collect();
+    rows.sort_by_key(|(_, mu)| -(mu.input + mu.output));
+    Some(rows)
+}
+
 /// Scan a Codex data directory and build the report.
 pub fn collect(dir: &Path, now: i64) -> ProviderReport {
     let sessions = dir.join("sessions");
