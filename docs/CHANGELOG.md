@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.6.0 — Unreleased
+## v0.6.0 — 2026-11-10
 
 ### Added
 - Usage detail window (design B): a dark window of provider cards —
@@ -15,7 +15,7 @@
   a startup declaration), so windows render crisply on scaled
   displays instead of being bitmap-stretched.
 
-## v0.5.0 — Unreleased
+## v0.5.0 — grouped into v0.6.0
 
 ### Added
 - OpenAI API provider: whole-organization token usage (today and the
@@ -37,7 +37,7 @@
 ### Changed
 - The settings window now lists seven providers.
 
-## v0.4.0 — unreleased
+## v0.4.0 — grouped into v0.6.0
 
 - **Settings window**: a dark, single-page configuration window (design B)
   opened from the tray menu's "Settings…" item, by double-clicking the
