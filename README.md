@@ -57,9 +57,12 @@ codexbar-windows status            last collected numbers
 codexbar-windows refresh           collect fresh numbers now
 codexbar-windows refresh --json    same, machine-readable
 codexbar-windows history           past snapshots
+codexbar-windows report            day-by-day summary from history
 codexbar-windows set-key openrouter
-                                   store an OpenRouter key (read from
-                                   stdin, encrypted with Windows DPAPI)
+                                   store a provider key (read from stdin,
+                                   encrypted with Windows DPAPI); openai
+                                   and anthropic take Admin keys for their
+                                   organization usage endpoints
 codexbar-windows config refresh 30 set the refresh interval (minutes)
 codexbar-windows settings          open the settings window (Windows)
 codexbar-windows settings --warn 85  set the warning threshold
