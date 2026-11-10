@@ -1,4 +1,4 @@
-# QUALITY.md — CodexBar-Windows v0.9.4 (2026-11-10)
+# QUALITY.md — CodexBar-Windows v0.9.5 (unreleased)
 
 Scored from evidence gathered at build time. Any Fail means not done.
 

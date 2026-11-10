@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.9.5 — Unreleased
+
+### Changed
+
+- Providers now collect in parallel instead of one after
+  another, so a refresh takes about as long as its slowest
+  provider rather than the sum of all of them — the difference
+  shows most on a slow network, where each provider's connect
+  and read timeouts used to add up. Reports still arrive in
+  the same fixed order. The detail window also reads its saved
+  history once per open instead of twice.
+
 ## v0.9.4 — 2026-11-10
 
 ### Changed

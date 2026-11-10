@@ -16,57 +16,111 @@ use std::path::{Path, PathBuf};
 /// logs twice. When a provider fails because the network looks down
 /// and a cached snapshot exists, the cached numbers are returned
 /// with an Offline note instead of an empty error.
+/// Join one provider thread. A disabled provider (no handle) stays
+/// absent from the list; a panicked collector becomes an honest
+/// failure report rather than a silently missing provider.
+fn join_provider(
+    h: Option<std::thread::ScopedJoinHandle<'_, ProviderReport>>,
+    id: &str,
+    name: &str,
+    now: i64,
+) -> Option<ProviderReport> {
+    h.map(|h| match h.join() {
+        Ok(r) => r,
+        Err(_) => ProviderReport::failed(id, name, now, "collection failed".into(), false),
+    })
+}
+
+/// One local collector's output: the report plus its breakdown rows.
+type Pair<T> = (ProviderReport, Option<Vec<(String, T)>>);
+
+/// Same, for the two local collectors that also return breakdown rows.
+fn join_pair<T>(
+    h: Option<std::thread::ScopedJoinHandle<'_, Pair<T>>>,
+    id: &str,
+    name: &str,
+    now: i64,
+) -> Option<Pair<T>> {
+    h.map(|h| match h.join() {
+        Ok(v) => v,
+        Err(_) => (
+            ProviderReport::failed(id, name, now, "collection failed".into(), false),
+            None,
+        ),
+    })
+}
+
 fn collect_impl(cfg: &Config, data_dir: &Path, now: i64) -> (Vec<ProviderReport>, Vec<String>) {
     let home = crate::config::home_dir();
+    let resolve = |opt: &Option<String>, leaf: &str| -> PathBuf {
+        opt.as_ref()
+            .map(PathBuf::from)
+            .or_else(|| home.as_ref().map(|h| h.join(leaf)))
+            .unwrap_or_else(|| PathBuf::from(leaf))
+    };
+    let codex_dir = resolve(&cfg.codex_dir, ".codex");
+    let claude_dir = resolve(&cfg.claude_dir, ".claude");
+    let gemini_dir = resolve(&cfg.gemini_dir, ".gemini");
+    let p = &cfg.providers;
+    // Every provider collects on its own thread, so a refresh takes
+    // as long as its slowest provider instead of the sum of all of
+    // them (the network collectors were the long pole: each can
+    // spend seconds in connect/send timeouts). Handles are joined
+    // in the fixed display order below, so the report order — and
+    // everything downstream of it — is unchanged.
     let mut out: Vec<ProviderReport> = Vec::new();
     let mut claude_rows = None;
     let mut codex_rows = None;
-    if cfg.providers.codex {
-        let dir = cfg
-            .codex_dir
-            .as_ref()
-            .map(PathBuf::from)
-            .or_else(|| home.as_ref().map(|h| h.join(".codex")))
-            .unwrap_or_else(|| PathBuf::from(".codex"));
-        let (report, rows) = codex::collect_with_breakdown(&dir, now);
-        out.push(report);
-        codex_rows = rows;
-    }
-    if cfg.providers.claude_code {
-        let dir = cfg
-            .claude_dir
-            .as_ref()
-            .map(PathBuf::from)
-            .or_else(|| home.as_ref().map(|h| h.join(".claude")))
-            .unwrap_or_else(|| PathBuf::from(".claude"));
-        let (report, rows) = claude_code::collect_with_breakdown(&dir, now);
-        out.push(report);
-        claude_rows = rows;
-    }
-    if cfg.providers.gemini {
-        let dir = cfg
-            .gemini_dir
-            .as_ref()
-            .map(PathBuf::from)
-            .or_else(|| home.as_ref().map(|h| h.join(".gemini")))
-            .unwrap_or_else(|| PathBuf::from(".gemini"));
-        out.push(gemini::collect(&dir, now));
-    }
-    if cfg.providers.openrouter {
-        out.push(openrouter::collect(data_dir, now));
-    }
-    if cfg.providers.deepseek {
-        out.push(deepseek::collect(data_dir, now));
-    }
-    if cfg.providers.moonshot {
-        out.push(moonshot::collect(data_dir, now));
-    }
-    if cfg.providers.openai {
-        out.push(openai::collect(data_dir, now));
-    }
-    if cfg.providers.anthropic {
-        out.push(anthropic::collect(data_dir, now));
-    }
+    std::thread::scope(|s| {
+        let h_codex = p
+            .codex
+            .then(|| s.spawn(|| codex::collect_with_breakdown(&codex_dir, now)));
+        let h_claude = p
+            .claude_code
+            .then(|| s.spawn(|| claude_code::collect_with_breakdown(&claude_dir, now)));
+        let h_gemini = p
+            .gemini
+            .then(|| s.spawn(|| gemini::collect(&gemini_dir, now)));
+        let h_openrouter = p
+            .openrouter
+            .then(|| s.spawn(|| openrouter::collect(data_dir, now)));
+        let h_deepseek = p
+            .deepseek
+            .then(|| s.spawn(|| deepseek::collect(data_dir, now)));
+        let h_moonshot = p
+            .moonshot
+            .then(|| s.spawn(|| moonshot::collect(data_dir, now)));
+        let h_openai = p.openai.then(|| s.spawn(|| openai::collect(data_dir, now)));
+        let h_anthropic = p
+            .anthropic
+            .then(|| s.spawn(|| anthropic::collect(data_dir, now)));
+        if let Some((report, rows)) = join_pair(h_codex, "codex", "Codex", now) {
+            out.push(report);
+            codex_rows = rows;
+        }
+        if let Some((report, rows)) = join_pair(h_claude, "claude_code", "Claude Code", now) {
+            out.push(report);
+            claude_rows = rows;
+        }
+        if let Some(r) = join_provider(h_gemini, "gemini", "Gemini", now) {
+            out.push(r);
+        }
+        if let Some(r) = join_provider(h_openrouter, "openrouter", "OpenRouter", now) {
+            out.push(r);
+        }
+        if let Some(r) = join_provider(h_deepseek, "deepseek", "DeepSeek", now) {
+            out.push(r);
+        }
+        if let Some(r) = join_provider(h_moonshot, "moonshot", "Moonshot", now) {
+            out.push(r);
+        }
+        if let Some(r) = join_provider(h_openai, "openai", "OpenAI API", now) {
+            out.push(r);
+        }
+        if let Some(r) = join_provider(h_anthropic, "anthropic", "Anthropic API", now) {
+            out.push(r);
+        }
+    });
     // Offline fallback: swap in the last cached windows for network failures.
     let cached = store::latest(data_dir);
     for r in out.iter_mut() {
