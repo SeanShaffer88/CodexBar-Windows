@@ -18,6 +18,10 @@ Usage:
   codexbar-windows refresh         Collect fresh numbers and save them
   codexbar-windows refresh --json  Same, as JSON
   codexbar-windows history         List saved snapshots (newest last)
+  codexbar-windows details         Open the usage detail window (Windows)
+  codexbar-windows breakdown       Per-model token + est. cost breakdown
+  codexbar-windows breakdown --json
+                                   Same, as JSON
   codexbar-windows report          Day-by-day summary from history
   codexbar-windows report --days 30 --json
                                    Same, more days, as JSON
@@ -68,6 +72,8 @@ pub fn run(args: &[String]) -> i32 {
             provider_filter(args),
         ),
         "history" => history_cmd(&dir, args.iter().any(|a| a == "--json")),
+        "details" => crate::detail::open(None),
+        "breakdown" => breakdown_cmd(&dir, args.iter().any(|a| a == "--json")),
         "report" => report_cmd(&dir, args),
         "clear-history" => match store::clear(&dir) {
             Ok(()) => {
@@ -350,6 +356,133 @@ fn report_cmd(dir: &Path, args: &[String]) -> i32 {
             println!("  {} - {}", r.name, parts.join("; "));
         }
     }
+    0
+}
+
+/// Per-model breakdown for the local-log providers: which models used
+/// how many tokens, and what that totals at public list prices.
+fn breakdown_cmd(dir: &Path, json: bool) -> i32 {
+    let (cfg, _) = config::load(dir);
+    let now = timeutil::now_unix();
+    let home = config::home_dir();
+    let resolve = |opt: &Option<String>, leaf: &str| {
+        opt.as_ref()
+            .map(std::path::PathBuf::from)
+            .or_else(|| home.as_ref().map(|h| h.join(leaf)))
+            .unwrap_or_else(|| std::path::PathBuf::from(leaf))
+    };
+    let claude_rows =
+        crate::scrapers::claude_code::model_breakdown(&resolve(&cfg.claude_dir, ".claude"), now);
+    let codex_rows =
+        crate::scrapers::codex::model_breakdown(&resolve(&cfg.codex_dir, ".codex"), now);
+    if claude_rows.is_none() && codex_rows.is_none() {
+        println!("No local logs found for Claude Code or Codex.");
+        return 0;
+    }
+    let tot =
+        |u: &crate::scrapers::claude_code::Use| u.input + u.output + u.cache_create + u.cache_read;
+    let est = |model: &str,
+               uncached: i64,
+               cache_read: i64,
+               cache_write: i64,
+               output: i64|
+     -> Option<f64> {
+        crate::pricing::price_for(model)
+            .map(|p| crate::pricing::estimate_usd(uncached, cache_read, cache_write, output, &p))
+    };
+    if json {
+        let claude_json: Vec<serde_json::Value> = claude_rows
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .map(|(m, mu)| {
+                serde_json::json!({
+                    "model": m,
+                    "today_tokens": tot(&mu.today),
+                    "today_est_usd": est(m, mu.today.input, mu.today.cache_read, mu.today.cache_create, mu.today.output),
+                    "month_tokens": tot(&mu.month),
+                    "month_est_usd": est(m, mu.month.input, mu.month.cache_read, mu.month.cache_create, mu.month.output),
+                })
+            })
+            .collect();
+        let codex_json: Vec<serde_json::Value> = codex_rows
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .map(|(m, mu)| {
+                serde_json::json!({
+                    "model": m,
+                    "month_input_tokens": mu.input,
+                    "month_cached_tokens": mu.cached,
+                    "month_output_tokens": mu.output,
+                    "month_est_usd": est(m, (mu.input - mu.cached).max(0), mu.cached, 0, mu.output),
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(
+                &serde_json::json!({"claude_code": claude_json, "codex": codex_json})
+            )
+            .unwrap_or_default()
+        );
+        return 0;
+    }
+    let money = |v: Option<f64>| v.map(|x| format!("${x:.2}")).unwrap_or_else(|| "-".into());
+    if let Some(rows) = &claude_rows {
+        println!("Claude Code - per model");
+        println!(
+            "  {:<34} {:>10} {:>9} {:>12} {:>9}",
+            "model", "today", "est.", "30 days", "est."
+        );
+        for (m, mu) in rows {
+            println!(
+                "  {:<34} {:>10} {:>9} {:>12} {:>9}",
+                m,
+                crate::model::fmt_num(tot(&mu.today) as f64),
+                money(est(
+                    m,
+                    mu.today.input,
+                    mu.today.cache_read,
+                    mu.today.cache_create,
+                    mu.today.output
+                )),
+                crate::model::fmt_num(tot(&mu.month) as f64),
+                money(est(
+                    m,
+                    mu.month.input,
+                    mu.month.cache_read,
+                    mu.month.cache_create,
+                    mu.month.output
+                )),
+            );
+        }
+        println!();
+    }
+    if let Some(rows) = &codex_rows {
+        println!("Codex - per model (last 30 days)");
+        println!(
+            "  {:<34} {:>12} {:>12} {:>9}",
+            "model", "input", "output", "est."
+        );
+        for (m, mu) in rows {
+            println!(
+                "  {:<34} {:>12} {:>12} {:>9}",
+                m,
+                crate::model::fmt_num(mu.input as f64),
+                crate::model::fmt_num(mu.output as f64),
+                money(est(
+                    m,
+                    (mu.input - mu.cached).max(0),
+                    mu.cached,
+                    0,
+                    mu.output
+                )),
+            );
+        }
+        println!();
+    }
+    println!("Estimates at public list prices; unpriced models show no estimate.");
     0
 }
 
