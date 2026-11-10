@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.6.0 — Unreleased
+
+### Added
+- Usage detail window (design B): a dark window of provider cards —
+  each provider's headline number big (session percent, month cost,
+  tokens today, credits left), a supporting line, and a bar or
+  footnote. Opens from the tray menu's "Details…" item or the
+  `details` command, and its Refresh button re-collects on the spot.
+- `breakdown` command: per-model token totals and list-price cost
+  estimates for Claude Code (today and 30 days) and Codex (30 days),
+  as text or `--json`.
+- Per-Monitor v2 DPI awareness (embedded manifest on MSVC builds plus
+  a startup declaration), so windows render crisply on scaled
+  displays instead of being bitmap-stretched.
+
 ## v0.5.0 — Unreleased
 
 ### Added
