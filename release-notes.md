@@ -1,23 +1,21 @@
-# CodexBar-Windows v0.9.2
+# CodexBar-Windows v0.9.3
 
 ## Fixes
 
-- The usage detail window opens instantly. It used to collect
-  everything before appearing — and scanned the local logs twice,
-  once for the cards and once for the breakdown — so on a machine
-  with large logs it took seconds to show. It now opens with the
-  last known numbers from the saved snapshot (breakdown lines are
-  stored in the snapshot too) and finishes loading in the
-  background; a refresh likewise runs in the background instead of
-  freezing the window, and one collection now produces both the
-  cards and the breakdown.
-- The detail window's "Refreshed" time is the local time. It
-  printed UTC before.
+- The usage detail window no longer cuts off its bottom. The
+  window was sized as if its height were all client area, but the
+  title bar and borders come out of that height, so the footer
+  and the Refresh/Close buttons fell below the visible area once
+  the content grew tall enough. The window is now sized from the
+  measured frame, so the client area matches the layout exactly.
+- A failed provider's card no longer cuts its message off
+  mid-sentence: the text cap now fits the full guidance (the
+  sign-in and set-key sentences), wrapped over two lines.
 
 ## Install
 
-- `CodexBar-Windows-v0.9.2-x64-Setup.exe` — installer
-- `CodexBar-Windows-v0.9.2-x64-Portable.zip` — unzip anywhere and run
+- `CodexBar-Windows-v0.9.3-x64-Setup.exe` — installer
+- `CodexBar-Windows-v0.9.3-x64-Portable.zip` — unzip anywhere and run
 - `SHA256SUMS.txt` — checksums for both
 
 Binaries are unsigned (no code-signing certificate); Windows SmartScreen
