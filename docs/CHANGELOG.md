@@ -1,6 +1,8 @@
 # Changelog
 
-## v0.3.0 — unreleased
+## v0.3.0 — 2026-11-09
+
+Grouped release: also covers v0.2.0 and v0.1.0 below, which were merged without individual releases.
 
 - Claude Code "Today" now starts at local midnight (using the machine's
   time-zone offset) instead of UTC midnight.
@@ -9,7 +11,7 @@
   enabled by `set-key moonshot` like the other key providers.
 - `status` and `refresh` accept `--provider <id>` to show one provider.
 
-## v0.2.0 — unreleased
+## v0.2.0 — grouped into v0.3.0
 
 - New provider: **DeepSeek** — account balances (total, granted,
   topped-up, per currency) from `api.deepseek.com/user/balance` with a
@@ -23,7 +25,7 @@
   shows one warning balloon naming the provider and window. It fires
   once per crossing, not on every refresh.
 
-## v0.1.0 — unreleased
+## v0.1.0 — grouped into v0.3.0
 
 First version. A native Windows version of CodexBar's core idea: AI
 coding limits in the tray.
