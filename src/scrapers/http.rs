@@ -1,6 +1,6 @@
-//! Minimal HTTPS GET built on WinHTTP (Windows) so the app needs no HTTP
-//! library and no extra runtime. Off Windows it reports unsupported; the
-//! caller turns that into an honest provider error.
+//! Minimal HTTPS on WinHTTP (Windows) so the app needs no HTTP library
+//! and no extra runtime. Off Windows it reports unsupported; the caller
+//! turns that into an honest provider error.
 
 /// GET `url` with an optional bearer token. Returns the body text.
 /// Errors are plain-language and never include the token.
@@ -19,7 +19,53 @@ pub fn get_json(url: &str, bearer: Option<&str>) -> Result<String, String> {
 /// `get_json`.
 #[cfg(windows)]
 pub fn get_json_headers(url: &str, extra_headers: &[(&str, &str)]) -> Result<String, String> {
-    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    let mut headers: Vec<(&str, &str)> = vec![("Accept", "application/json")];
+    headers.extend_from_slice(extra_headers);
+    let (status, body) = send("GET", url, &headers, None)?;
+    if status == 401 || status == 403 {
+        return Err("the server refused the API key (check it with set-key)".to_string());
+    }
+    if status != 200 {
+        return Err(format!("the server answered with status {status}"));
+    }
+    Ok(body)
+}
+
+/// POST `body` to `url` with an optional bearer token and content type.
+/// Returns the body text on HTTP 200; other statuses come back as
+/// `status NNN` so the caller can word the error for its own service.
+#[cfg(windows)]
+pub fn post_json(
+    url: &str,
+    bearer: Option<&str>,
+    content_type: &str,
+    body: &str,
+) -> Result<String, String> {
+    let mut headers: Vec<(&str, &str)> = vec![
+        ("Accept", "application/json"),
+        ("Content-Type", content_type),
+    ];
+    let auth;
+    if let Some(tok) = bearer {
+        auth = format!("Bearer {tok}");
+        headers.push(("Authorization", &auth));
+    }
+    let (status, resp) = send("POST", url, &headers, Some(body))?;
+    if status != 200 {
+        return Err(format!("status {status}"));
+    }
+    Ok(resp)
+}
+
+/// One WinHTTP request: returns (status, body text). Network-level
+/// failures are plain-language errors; the status line itself is data.
+#[cfg(windows)]
+fn send(
+    method: &str,
+    url: &str,
+    headers: &[(&str, &str)],
+    body: Option<&str>,
+) -> Result<(u32, String), String> {
     use windows_sys::Win32::Networking::WinHttp::*;
 
     fn wide(s: &str) -> Vec<u16> {
@@ -46,20 +92,20 @@ pub fn get_json_headers(url: &str, extra_headers: &[(&str, &str)]) -> Result<Str
     let host = unsafe {
         String::from_utf16_lossy(std::slice::from_raw_parts(
             comps.lpszHostName,
-            (comps.dwHostNameLength) as usize,
+            comps.dwHostNameLength as usize,
         ))
     };
     let mut path = unsafe {
         String::from_utf16_lossy(std::slice::from_raw_parts(
             comps.lpszUrlPath,
-            (comps.dwUrlPathLength) as usize,
+            comps.dwUrlPathLength as usize,
         ))
     };
     if comps.dwExtraInfoLength > 0 {
         let extra = unsafe {
             String::from_utf16_lossy(std::slice::from_raw_parts(
                 comps.lpszExtraInfo,
-                (comps.dwExtraInfoLength) as usize,
+                comps.dwExtraInfoLength as usize,
             ))
         };
         path.push_str(&extra);
@@ -91,7 +137,7 @@ pub fn get_json_headers(url: &str, extra_headers: &[(&str, &str)]) -> Result<Str
         };
         let request = Handle(WinHttpOpenRequest(
             connect.0 as _,
-            wide("GET").as_ptr(),
+            wide(method).as_ptr(),
             wide(&path).as_ptr(),
             std::ptr::null(),
             std::ptr::null(),
@@ -101,17 +147,22 @@ pub fn get_json_headers(url: &str, extra_headers: &[(&str, &str)]) -> Result<Str
         if request.0 == 0 {
             return Err("could not build the request".to_string());
         }
-        let mut headers = String::from("Accept: application/json\r\n");
-        for (name, value) in extra_headers {
-            headers.push_str(&format!("{name}: {value}\r\n"));
+        let mut header_text = String::new();
+        for (name, value) in headers {
+            header_text.push_str(&format!("{name}: {value}\r\n"));
         }
+        let body_bytes = body.map(|b| b.as_bytes());
+        let (data_ptr, data_len) = match &body_bytes {
+            Some(b) => (b.as_ptr() as *mut _, b.len() as u32),
+            None => (std::ptr::null_mut(), 0),
+        };
         let sent = WinHttpSendRequest(
             request.0 as _,
-            wide(&headers).as_ptr(),
+            wide(&header_text).as_ptr(),
             u32::MAX,
-            std::ptr::null(),
-            0,
-            0,
+            data_ptr,
+            data_len,
+            data_len,
             0,
         );
         if sent == 0 || WinHttpReceiveResponse(request.0 as _, std::ptr::null_mut()) == 0 {
@@ -127,7 +178,7 @@ pub fn get_json_headers(url: &str, extra_headers: &[(&str, &str)]) -> Result<Str
             &mut len,
             std::ptr::null_mut(),
         );
-        let mut body: Vec<u8> = Vec::new();
+        let mut raw: Vec<u8> = Vec::new();
         loop {
             let mut avail: u32 = 0;
             if WinHttpQueryDataAvailable(request.0 as _, &mut avail) == 0 {
@@ -142,16 +193,10 @@ pub fn get_json_headers(url: &str, extra_headers: &[(&str, &str)]) -> Result<Str
                 break;
             }
             buf.truncate(read as usize);
-            body.extend_from_slice(&buf);
+            raw.extend_from_slice(&buf);
         }
-        let _ = ERROR_SUCCESS;
-        if status == 401 || status == 403 {
-            return Err("the server refused the API key (check it with set-key)".to_string());
-        }
-        if status != 200 {
-            return Err(format!("the server answered with status {status}"));
-        }
-        String::from_utf8(body).map_err(|_| "the server's answer was not text".to_string())
+        let text = String::from_utf8(raw).map_err(|_| "the server's answer was not text")?;
+        Ok((status, text))
     }
 }
 
@@ -163,5 +208,15 @@ pub fn get_json(url: &str, bearer: Option<&str>) -> Result<String, String> {
 
 #[cfg(not(windows))]
 pub fn get_json_headers(_url: &str, _headers: &[(&str, &str)]) -> Result<String, String> {
+    Err("network checks are only available in the Windows build".to_string())
+}
+
+#[cfg(not(windows))]
+pub fn post_json(
+    _url: &str,
+    _bearer: Option<&str>,
+    _content_type: &str,
+    _body: &str,
+) -> Result<String, String> {
     Err("network checks are only available in the Windows build".to_string())
 }
