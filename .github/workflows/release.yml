@@ -1,0 +1,56 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Version from tag
+        id: ver
+        shell: pwsh
+        run: |
+          $v = "${{ github.ref_name }}".TrimStart("v")
+          "version=$v" >> $env:GITHUB_OUTPUT
+      - name: Test
+        run: cargo test
+      - name: Build
+        run: cargo build --release --target x86_64-pc-windows-msvc
+      - name: Package portable zip
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          New-Item -ItemType Directory -Force -Path stage | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/codexbar-windows.exe stage/
+          Copy-Item README.md, LICENSE stage/
+          Compress-Archive -Path stage/* -DestinationPath "CodexBar-Windows-v$v-x64-Portable.zip"
+      - name: Install NSIS
+        run: choco install nsis -y --no-progress
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          & "C:\Program Files (x86)\NSIS\makensis.exe" /DVERSION=$v installer/codexbar-windows.nsi
+      - name: Checksums
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          $files = @("CodexBar-Windows-v$v-x64-Setup.exe", "CodexBar-Windows-v$v-x64-Portable.zip")
+          $lines = foreach ($f in $files) { $h = (Get-FileHash $f -Algorithm SHA256).Hash.ToLower(); "$h  $f" }
+          $lines | Set-Content -Encoding ascii SHA256SUMS.txt
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          gh release create "v$v" "CodexBar-Windows-v$v-x64-Setup.exe" "CodexBar-Windows-v$v-x64-Portable.zip" SHA256SUMS.txt --title "CodexBar-Windows v$v" --generate-notes
