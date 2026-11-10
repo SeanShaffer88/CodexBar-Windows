@@ -20,6 +20,8 @@ store encrypted on your machine.
 - **Claude Code** — real token totals from Claude Code's local
   transcripts: today, last 7 days, last 30 days. (Claude Code does not
   store account limit percentages locally, so none are invented.)
+- **Gemini** — Pro / Flash / Flash Lite quotas and your plan, through
+  the Gemini CLI's own local sign-in (no key to store).
 - **OpenRouter** — credit usage and remaining balance for your API key,
   from OpenRouter's `auth/key` endpoint.
 - **DeepSeek** — account balances (total, granted, topped-up) for your
@@ -57,8 +59,8 @@ SmartScreen may ask you to confirm the first run.
 ## Use
 
 Double-click `codexbar-windows.exe` and it settles into the tray and
-opens the usage detail window. The tray icon shows a usage bar for your
-busiest window (green, amber at 70%, red at 90%); hover for a summary,
+opens the usage detail window. The tray icon shows your busiest
+window's percent as a number (green, amber at 70%, red at 90%); hover for a summary,
 click for the full breakdown, Refresh, and Quit. It refreshes every 15
 minutes (changeable) and keeps a bounded history of past readings in
 `data/history.json`.
