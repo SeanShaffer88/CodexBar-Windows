@@ -12,6 +12,12 @@ pub const MAX_SNAPSHOTS: usize = 500;
 pub struct Snapshot {
     pub at: i64,
     pub reports: Vec<ProviderReport>,
+    /// The refresh's per-model breakdown lines, stored with the
+    /// numbers they were computed from so the detail window can
+    /// open fully formed from the snapshot alone. Older history
+    /// files predate the field and load with it empty.
+    #[serde(default)]
+    pub breakdown: Vec<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -33,12 +39,18 @@ fn load_file(dir: &Path) -> HistoryFile {
 }
 
 /// Append one snapshot, keeping at most MAX_SNAPSHOTS.
-pub fn append(dir: &Path, reports: &[ProviderReport], now: i64) -> Result<(), String> {
+pub fn append(
+    dir: &Path,
+    reports: &[ProviderReport],
+    breakdown: &[String],
+    now: i64,
+) -> Result<(), String> {
     let mut f = load_file(dir);
     f.schema_version = 1;
     f.snapshots.push(Snapshot {
         at: now,
         reports: reports.to_vec(),
+        breakdown: breakdown.to_vec(),
     });
     if f.snapshots.len() > MAX_SNAPSHOTS {
         let drop = f.snapshots.len() - MAX_SNAPSHOTS;
@@ -94,14 +106,36 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("cbw-hist-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         for i in 0..5 {
-            append(&dir, &[report("codex")], i).unwrap();
+            append(
+                &dir,
+                &[report("codex")],
+                &["Codex · m — 1 tokens".to_string()],
+                i,
+            )
+            .unwrap();
         }
         let snaps = all(&dir);
         assert_eq!(snaps.len(), 5);
         assert_eq!(latest(&dir).unwrap().at, 4);
+        assert_eq!(latest(&dir).unwrap().breakdown.len(), 1);
         clear(&dir).unwrap();
         assert!(all(&dir).is_empty());
         assert!(dir.join("history.json.bak").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn history_without_breakdown_field_loads_empty() {
+        // A history file written before snapshots carried breakdown
+        // lines: no `breakdown` key at all. It must still load.
+        let dir = std::env::temp_dir().join(format!("cbw-hist-legacy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let legacy = r#"{"schema_version":1,"snapshots":[{"at":7,"reports":[]}]}"#;
+        std::fs::write(dir.join("history.json"), legacy).unwrap();
+        let snap = latest(&dir).expect("legacy snapshot loads");
+        assert_eq!(snap.at, 7);
+        assert!(snap.breakdown.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

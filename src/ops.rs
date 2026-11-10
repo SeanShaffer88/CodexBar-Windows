@@ -9,12 +9,18 @@ use crate::scrapers::{
 use crate::store;
 use std::path::{Path, PathBuf};
 
-/// Collect fresh reports from every enabled provider. When a provider fails
-/// because the network looks down and a cached snapshot exists, the cached
-/// numbers are returned with an Offline note instead of an empty error.
-pub fn collect_all(cfg: &Config, data_dir: &Path, now: i64) -> Vec<ProviderReport> {
+/// Collect fresh reports from every enabled provider, plus the
+/// per-model breakdown lines computed from the SAME pass: the local
+/// scrapers hand back their per-model rows alongside the report, so
+/// a caller that needs both (the detail window) never scans the
+/// logs twice. When a provider fails because the network looks down
+/// and a cached snapshot exists, the cached numbers are returned
+/// with an Offline note instead of an empty error.
+fn collect_impl(cfg: &Config, data_dir: &Path, now: i64) -> (Vec<ProviderReport>, Vec<String>) {
     let home = crate::config::home_dir();
     let mut out: Vec<ProviderReport> = Vec::new();
+    let mut claude_rows = None;
+    let mut codex_rows = None;
     if cfg.providers.codex {
         let dir = cfg
             .codex_dir
@@ -22,7 +28,9 @@ pub fn collect_all(cfg: &Config, data_dir: &Path, now: i64) -> Vec<ProviderRepor
             .map(PathBuf::from)
             .or_else(|| home.as_ref().map(|h| h.join(".codex")))
             .unwrap_or_else(|| PathBuf::from(".codex"));
-        out.push(codex::collect(&dir, now));
+        let (report, rows) = codex::collect_with_breakdown(&dir, now);
+        out.push(report);
+        codex_rows = rows;
     }
     if cfg.providers.claude_code {
         let dir = cfg
@@ -31,7 +39,9 @@ pub fn collect_all(cfg: &Config, data_dir: &Path, now: i64) -> Vec<ProviderRepor
             .map(PathBuf::from)
             .or_else(|| home.as_ref().map(|h| h.join(".claude")))
             .unwrap_or_else(|| PathBuf::from(".claude"));
-        out.push(claude_code::collect(&dir, now));
+        let (report, rows) = claude_code::collect_with_breakdown(&dir, now);
+        out.push(report);
+        claude_rows = rows;
     }
     if cfg.providers.gemini {
         let dir = cfg
@@ -72,7 +82,8 @@ pub fn collect_all(cfg: &Config, data_dir: &Path, now: i64) -> Vec<ProviderRepor
             }
         }
     }
-    out
+    let lines = format_breakdown_lines(claude_rows.as_deref(), codex_rows.as_deref());
+    (out, lines)
 }
 
 /// True when the worst window crossed `threshold` upward since the last
@@ -183,9 +194,19 @@ pub fn format_breakdown_lines(
 
 /// Collect and record a history snapshot.
 pub fn refresh(cfg: &Config, data_dir: &Path, now: i64) -> Vec<ProviderReport> {
-    let reports = collect_all(cfg, data_dir, now);
-    let _ = store::append(data_dir, &reports, now);
-    reports
+    refresh_detailed(cfg, data_dir, now).0
+}
+
+/// Collect, snapshot (reports + breakdown lines together), and
+/// return both — the detail window's load path.
+pub fn refresh_detailed(
+    cfg: &Config,
+    data_dir: &Path,
+    now: i64,
+) -> (Vec<ProviderReport>, Vec<String>) {
+    let (reports, lines) = collect_impl(cfg, data_dir, now);
+    let _ = store::append(data_dir, &reports, &lines, now);
+    (reports, lines)
 }
 
 /// Render reports as plain text (used by the CLI and as the tray's data).

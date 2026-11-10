@@ -259,6 +259,7 @@ mod tests {
     fn snap(at: i64, today_tokens: f64) -> crate::store::Snapshot {
         crate::store::Snapshot {
             at,
+            breakdown: Vec::new(),
             reports: vec![ProviderReport {
                 id: "claude".into(),
                 name: "Claude Code".into(),
@@ -352,9 +353,12 @@ mod imp {
 
     const ID_REFRESH: usize = 500;
     const ID_CLOSE: usize = 2; // IDCANCEL: Esc closes
+    /// Posted by the load worker when its result is in `LOADED`.
+    const WM_DETAIL_LOADED: u32 = WM_APP + 30;
 
     static OPEN: AtomicBool = AtomicBool::new(false);
     static WIN: Mutex<usize> = Mutex::new(0);
+    static LOADED: Mutex<Option<Loaded>> = Mutex::new(None);
 
     fn wide(s: &str) -> Vec<u16> {
         s.encode_utf16().chain(std::iter::once(0)).collect()
@@ -387,10 +391,16 @@ mod imp {
         cards: Vec<Card>,
         chart: Vec<DayTokens>,
         breakdown: Vec<String>,
-        /// Total extra height the window was sized with (chart +
-        /// breakdown sections); a refresh resizes when this changes.
-        extra_h: i32,
+        /// The window height it was last sized to; a finished load
+        /// resizes when the content's height differs.
+        height: i32,
         fetched: i64,
+        /// A background load is in flight (the window opened from
+        /// the snapshot alone, or a refresh is running).
+        loading: bool,
+        /// The pending load is a full refresh, not just the
+        /// breakdown fill-in.
+        load_full: bool,
         f_label: HFONT,
         f_big: HFONT,
         f_norm: HFONT,
@@ -400,6 +410,27 @@ mod imp {
     struct Init {
         dir: PathBuf,
         tray: Option<HWND>,
+        cards: Vec<Card>,
+        chart: Vec<DayTokens>,
+        breakdown: Vec<String>,
+        fetched: i64,
+        loading: bool,
+        load_full: bool,
+    }
+
+    /// What a finished background load hands back through `LOADED`.
+    struct Loaded {
+        full: bool,
+        cards: Option<Vec<Card>>,
+        chart: Option<Vec<DayTokens>>,
+        breakdown: Vec<String>,
+        fetched: Option<i64>,
+    }
+
+    #[derive(Clone, Copy)]
+    enum LoadKind {
+        Full,
+        BreakdownOnly,
     }
 
     fn load_chart(dir: &std::path::Path, now: i64) -> Vec<DayTokens> {
@@ -407,25 +438,87 @@ mod imp {
         daily_tokens(&store::all(dir), now, 14, offset)
     }
 
-    fn load_cards(dir: &std::path::Path) -> (Vec<Card>, i64, Vec<DayTokens>, Vec<String>) {
-        let (cfg, _) = config::load(dir);
-        if let Some(snap) = store::latest(dir) {
-            let now = timeutil::now_unix();
-            return (
-                cards_for(&snap.reports, now),
-                snap.at,
-                load_chart(dir, now),
-                ops::breakdown_lines(&cfg, now),
-            );
-        }
+    /// Everything the last snapshot already knows, ready to paint.
+    struct SnapshotData {
+        cards: Vec<Card>,
+        fetched: i64,
+        chart: Vec<DayTokens>,
+        breakdown: Vec<String>,
+    }
+
+    /// The instant open path: everything the last snapshot already
+    /// knows — cards, chart, and the breakdown lines stored with it.
+    /// Store reads only; no provider collection, no log scans.
+    fn load_snapshot(dir: &std::path::Path) -> Option<SnapshotData> {
+        let snap = store::latest(dir)?;
         let now = timeutil::now_unix();
-        let reports = ops::refresh(&cfg, dir, now);
-        (
-            cards_for(&reports, now),
-            now,
-            load_chart(dir, now),
-            ops::breakdown_lines(&cfg, now),
-        )
+        Some(SnapshotData {
+            cards: cards_for(&snap.reports, now),
+            fetched: snap.at,
+            chart: load_chart(dir, now),
+            breakdown: snap.breakdown.clone(),
+        })
+    }
+
+    /// Run a load off the UI thread (the tray's spawn_refresh
+    /// pattern): the window paints what it has, the worker collects,
+    /// and WM_DETAIL_LOADED applies the result.
+    fn spawn_load(hwnd: HWND, dir: PathBuf, kind: LoadKind) {
+        let hwnd_addr = hwnd as usize;
+        std::thread::spawn(move || {
+            let (cfg, _) = config::load(&dir);
+            let now = timeutil::now_unix();
+            let loaded = match kind {
+                LoadKind::Full => {
+                    let (reports, lines) = ops::refresh_detailed(&cfg, &dir, now);
+                    Loaded {
+                        full: true,
+                        cards: Some(cards_for(&reports, now)),
+                        chart: Some(load_chart(&dir, now)),
+                        breakdown: lines,
+                        fetched: Some(now),
+                    }
+                }
+                LoadKind::BreakdownOnly => Loaded {
+                    full: false,
+                    cards: None,
+                    chart: None,
+                    breakdown: ops::breakdown_lines(&cfg, now),
+                    fetched: None,
+                },
+            };
+            if let Ok(mut slot) = LOADED.lock() {
+                *slot = Some(loaded);
+            }
+            unsafe {
+                PostMessageW(hwnd_addr as HWND, WM_DETAIL_LOADED, 0, 0);
+            }
+        });
+    }
+
+    /// Resize the window (and move its buttons) when the content's
+    /// height differs from the height it was last sized to.
+    unsafe fn apply_height(hwnd: HWND, st: &mut State) {
+        let h = win_height(st.cards.len(), &st.chart, &st.breakdown);
+        if h == st.height {
+            return;
+        }
+        st.height = h;
+        SetWindowPos(
+            hwnd,
+            std::ptr::null_mut(),
+            0,
+            0,
+            680,
+            h,
+            SWP_NOMOVE | SWP_NOZORDER,
+        );
+        for (id, x) in [(ID_REFRESH, 432), (ID_CLOSE, 542)] {
+            let b = GetDlgItem(hwnd, id as i32);
+            if !b.is_null() {
+                SetWindowPos(b, std::ptr::null_mut(), x, h - 44, 100, 30, SWP_NOZORDER);
+            }
+        }
     }
 
     fn rows(n: usize) -> i32 {
@@ -471,7 +564,24 @@ mod imp {
                 return 0;
             }
             let dir = config::data_dir_env();
-            let (cards, _, chart, breakdown) = load_cards(&dir);
+            // Open from the snapshot alone — the window appears at
+            // once; a background load fills in whatever the snapshot
+            // cannot know yet (see spawn_load).
+            let (cards, fetched, chart, breakdown, loading, load_full) = match load_snapshot(&dir) {
+                Some(d) => {
+                    let fill_breakdown = d.breakdown.is_empty();
+                    (
+                        d.cards,
+                        d.fetched,
+                        d.chart,
+                        d.breakdown,
+                        fill_breakdown,
+                        false,
+                    )
+                }
+                None => (Vec::new(), 0, Vec::new(), Vec::new(), true, true),
+            };
+            let height = win_height(cards.len(), &chart, &breakdown);
             let hinst = GetModuleHandleW(std::ptr::null());
             let class_name = wide("CodexBarWinDetail");
             let bg = CreateSolidBrush(BG);
@@ -488,7 +598,16 @@ mod imp {
                 ..std::mem::zeroed()
             };
             RegisterClassExW(&wc);
-            let init = Box::new(Init { dir, tray });
+            let init = Box::new(Init {
+                dir,
+                tray,
+                cards,
+                chart,
+                breakdown,
+                fetched,
+                loading,
+                load_full,
+            });
             let hwnd = CreateWindowExW(
                 0,
                 class_name.as_ptr(),
@@ -497,7 +616,7 @@ mod imp {
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
                 680,
-                win_height(cards.len(), &chart, &breakdown),
+                height,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
                 hinst,
@@ -611,18 +730,38 @@ mod imp {
         // Header.
         text_out(dc, 18, 14, st.f_big, INK, "");
         text_out(dc, 18, 16, st.f_norm, INK, "Usage detail");
-        let stamp = timeutil::format_utc(st.fetched);
-        let hm = if stamp.len() >= 16 {
-            &stamp[11..16]
+        let right = if st.loading {
+            if st.cards.is_empty() {
+                "Loading\u{2026}".to_string()
+            } else {
+                "Refreshing\u{2026}".to_string()
+            }
         } else {
-            ""
+            // Local wall time: shift the UTC stamp by the machine's
+            // offset before formatting (it printed UTC before).
+            let local = st.fetched + timeutil::local_utc_offset_seconds();
+            let stamp = timeutil::format_utc(local);
+            let hm = if stamp.len() >= 16 {
+                &stamp[11..16]
+            } else {
+                ""
+            };
+            format!("Refreshed {hm}")
         };
-        let right = format!("Refreshed {hm}");
         let mut sz: SIZE = std::mem::zeroed();
         let old = SelectObject(dc, st.f_small);
         GetTextExtentPoint32W(dc, wide(&right).as_ptr(), right.len() as i32, &mut sz);
         SelectObject(dc, old);
         text_out(dc, rc.right - sz.cx - 18, 18, st.f_small, DIM, &right);
+        // Body states before any cards exist.
+        if st.cards.is_empty() {
+            let msg = if st.loading {
+                "Collecting your latest numbers\u{2026}"
+            } else {
+                "No providers are enabled \u{2014} open Settings to turn some on."
+            };
+            text_out(dc, 18, 64, st.f_norm, DIM, msg);
+        }
         // Cards.
         for (i, c) in st.cards.iter().enumerate() {
             let col = (i % 2) as i32;
@@ -783,29 +922,29 @@ mod imp {
             WM_CREATE => {
                 let cs = &*(lp as *const CREATESTRUCTW);
                 let init = Box::from_raw(cs.lpCreateParams as *mut Init);
-                let (cards, fetched, chart, breakdown) = load_cards(&init.dir);
-                let extra_h = sections_extra(&chart, &breakdown);
+                let height = win_height(init.cards.len(), &init.chart, &init.breakdown);
                 let st = Box::new(State {
                     dir: init.dir.clone(),
                     tray: init.tray,
-                    cards,
-                    chart,
-                    breakdown,
-                    extra_h,
-                    fetched,
+                    cards: init.cards,
+                    chart: init.chart,
+                    breakdown: init.breakdown,
+                    height,
+                    fetched: init.fetched,
+                    loading: init.loading,
+                    load_full: init.load_full,
                     f_label: font(-13, 700),
                     f_big: font(-34, 700),
                     f_norm: font(-15, 400),
                     f_small: font(-12, 400),
                 });
-                let n = st.cards.len();
                 ctl(
                     hwnd,
                     "BUTTON",
                     "Refresh",
                     (BS_OWNERDRAW as u32) | WS_TABSTOP,
                     432,
-                    win_height(n, &st.chart, &st.breakdown) - 44,
+                    height - 44,
                     100,
                     30,
                     ID_REFRESH,
@@ -816,12 +955,51 @@ mod imp {
                     "Close",
                     (BS_OWNERDRAW as u32) | WS_TABSTOP,
                     542,
-                    win_height(n, &st.chart, &st.breakdown) - 44,
+                    height - 44,
                     100,
                     30,
                     ID_CLOSE,
                 );
+                let pending = if st.loading {
+                    Some(if st.load_full {
+                        LoadKind::Full
+                    } else {
+                        LoadKind::BreakdownOnly
+                    })
+                } else {
+                    None
+                };
+                let dir = st.dir.clone();
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(st) as isize);
+                if let Some(kind) = pending {
+                    spawn_load(hwnd, dir, kind);
+                }
+                0
+            }
+            WM_DETAIL_LOADED => {
+                let st = &mut *(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut State);
+                if let Some(loaded) = LOADED.lock().unwrap().take() {
+                    st.breakdown = loaded.breakdown;
+                    if loaded.full {
+                        if let Some(cards) = loaded.cards {
+                            st.cards = cards;
+                        }
+                        if let Some(chart) = loaded.chart {
+                            st.chart = chart;
+                        }
+                        if let Some(f) = loaded.fetched {
+                            st.fetched = f;
+                        }
+                    }
+                    st.loading = false;
+                    apply_height(hwnd, st);
+                    if loaded.full {
+                        if let Some(t) = st.tray {
+                            PostMessageW(t, crate::tray::imp::WM_SETTINGS_SAVED, 0, 0);
+                        }
+                    }
+                    InvalidateRect(hwnd, std::ptr::null(), 1);
+                }
                 0
             }
             WM_PAINT => {
@@ -837,47 +1015,16 @@ mod imp {
                 let id = wp & 0xFFFF;
                 if id == ID_REFRESH {
                     let st = &mut *(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut State);
-                    let (cfg, _) = config::load(&st.dir);
-                    let now = timeutil::now_unix();
-                    let reports = ops::refresh(&cfg, &st.dir, now);
-                    st.cards = cards_for(&reports, now);
-                    st.chart = load_chart(&st.dir, now);
-                    st.breakdown = ops::breakdown_lines(&cfg, now);
-                    st.fetched = now;
-                    // The window was sized for the section state at
-                    // creation; resize if a refresh changed it.
-                    let extra = sections_extra(&st.chart, &st.breakdown);
-                    if extra != st.extra_h {
-                        st.extra_h = extra;
-                        let h = win_height(st.cards.len(), &st.chart, &st.breakdown);
-                        SetWindowPos(
-                            hwnd,
-                            std::ptr::null_mut(),
-                            0,
-                            0,
-                            680,
-                            h,
-                            SWP_NOMOVE | SWP_NOZORDER,
-                        );
-                        for (id, x) in [(ID_REFRESH, 432), (ID_CLOSE, 542)] {
-                            let b = GetDlgItem(hwnd, id as i32);
-                            if !b.is_null() {
-                                SetWindowPos(
-                                    b,
-                                    std::ptr::null_mut(),
-                                    x,
-                                    h - 44,
-                                    100,
-                                    30,
-                                    SWP_NOZORDER,
-                                );
-                            }
-                        }
+                    // The refresh runs on a worker; the result lands
+                    // through WM_DETAIL_LOADED. A click while a load
+                    // is already in flight does nothing.
+                    if !st.loading {
+                        st.loading = true;
+                        st.load_full = true;
+                        let dir = st.dir.clone();
+                        InvalidateRect(hwnd, std::ptr::null(), 1);
+                        spawn_load(hwnd, dir, LoadKind::Full);
                     }
-                    if let Some(t) = st.tray {
-                        PostMessageW(t, crate::tray::imp::WM_SETTINGS_SAVED, 0, 0);
-                    }
-                    InvalidateRect(hwnd, std::ptr::null(), 1);
                     0
                 } else if id == ID_CLOSE {
                     DestroyWindow(hwnd);

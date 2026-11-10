@@ -29,6 +29,8 @@
   `details` command, with its own Refresh. It also opens on its own
   when the program starts — and starting the program again while it
   runs brings the window up instead of an "already running" note.
+  It opens instantly with the last known numbers and finishes
+  loading in the background; a refresh never freezes the window.
 - Tokens-per-day chart in the detail window: the last 14 days from
   the saved history, for the providers that keep a daily count.
 - `breakdown` command: per-model token totals and cost estimates for
