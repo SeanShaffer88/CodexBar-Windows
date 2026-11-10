@@ -33,6 +33,7 @@ pub(crate) mod imp {
     pub(crate) const WM_SETTINGS_SAVED: u32 = WM_APP + 7;
     const TIMER_ID: usize = 1;
     const ID_SETTINGS: usize = 1005;
+    const ID_DETAILS: usize = 1006;
     const ID_REFRESH: usize = 1001;
     const ID_FOLDER: usize = 1002;
     const ID_HELP: usize = 1003;
@@ -341,6 +342,7 @@ pub(crate) mod imp {
         }
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
         AppendMenuW(menu, MF_STRING, ID_REFRESH, wide("Refresh now").as_ptr());
+        AppendMenuW(menu, MF_STRING, ID_DETAILS, wide("Details…").as_ptr());
         AppendMenuW(menu, MF_STRING, ID_SETTINGS, wide("Settings…").as_ptr());
         AppendMenuW(
             menu,
@@ -366,6 +368,9 @@ pub(crate) mod imp {
         );
         DestroyMenu(menu);
         match cmd as usize {
+            ID_DETAILS => {
+                crate::detail::open(Some(hwnd));
+            }
             ID_SETTINGS => {
                 crate::settings::open(Some(hwnd));
             }

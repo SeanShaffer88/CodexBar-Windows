@@ -23,6 +23,12 @@
   to the newest 500) and can be listed or exported as JSON.
 - API keys encrypted with Windows DPAPI; never stored or logged in plain
   text.
+- Usage detail window: one card per provider with its headline number
+  (percent, month cost, tokens, or credits), from the tray menu or the
+  `details` command, with its own Refresh.
+- `breakdown` command: per-model token totals and cost estimates for
+  the local-log providers.
+- Per-Monitor v2 DPI awareness for crisp rendering on scaled displays.
 - Full command-line parity for every tray capability, including `--json`.
 - Single instance, no console window in tray mode, no registry writes,
   no telemetry, no external runtime.

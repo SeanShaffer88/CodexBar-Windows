@@ -143,6 +143,33 @@ pub fn estimate(per_model: &HashMap<String, ModelUse>) -> (f64, f64, bool) {
     (today, month, priced)
 }
 
+/// Per-model totals for the `breakdown` view, busiest model first.
+/// None when there is no projects folder at all.
+pub fn model_breakdown(dir: &Path, now: i64) -> Option<Vec<(String, ModelUse)>> {
+    let projects = dir.join("projects");
+    if !projects.is_dir() {
+        return None;
+    }
+    let mut totals = TokenTotals::default();
+    let mut seen = HashSet::new();
+    let mut per_model: HashMap<String, ModelUse> = HashMap::new();
+    let offset = timeutil::local_utc_offset_seconds();
+    for f in super::jsonl_files(&projects) {
+        parse_lines(
+            &super::read_lines(&f),
+            now,
+            offset,
+            &mut totals,
+            &mut seen,
+            &mut per_model,
+        );
+    }
+    let total = |u: &Use| u.input + u.output + u.cache_create + u.cache_read;
+    let mut rows: Vec<(String, ModelUse)> = per_model.into_iter().collect();
+    rows.sort_by_key(|(_, mu)| -total(&mu.month));
+    Some(rows)
+}
+
 /// Scan a Claude Code data directory and build the report.
 pub fn collect(dir: &Path, now: i64) -> ProviderReport {
     let projects = dir.join("projects");

@@ -7,6 +7,7 @@
 
 mod cli;
 mod config;
+mod detail;
 mod model;
 mod ops;
 mod pricing;
@@ -18,6 +19,24 @@ mod timeutil;
 mod tray;
 
 fn main() {
+    set_dpi_awareness();
     let args: Vec<String> = std::env::args().skip(1).collect();
     std::process::exit(cli::run(&args));
 }
+
+/// Ask Windows for Per-Monitor v2 DPI awareness before any window is
+/// created, so the tray windows render crisply on scaled displays.
+/// MSVC builds also carry the same declaration in the embedded
+/// manifest; this call covers the rest and is a no-op elsewhere.
+#[cfg(windows)]
+fn set_dpi_awareness() {
+    use windows_sys::Win32::UI::HiDpi::{
+        SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+    };
+    unsafe {
+        let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    }
+}
+
+#[cfg(not(windows))]
+fn set_dpi_awareness() {}
