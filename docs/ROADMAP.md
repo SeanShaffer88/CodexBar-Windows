@@ -5,7 +5,6 @@ source exists.
 
 - Windows field verification of the tray, DPAPI key storage, and
   OpenRouter polling; screenshots from a real run.
-- Local-day (not UTC-day) bucketing for Claude Code totals.
 - Low-limit notifications from the tray.
 - A small settings window (providers on/off, refresh interval, keys).
 - More providers with genuine local or API sources (for example Gemini
